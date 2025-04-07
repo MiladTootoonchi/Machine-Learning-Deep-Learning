@@ -15,11 +15,11 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, rand
 
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)  # Using transform to prevent data leakage
+X_test_scaled = scaler.transform(X_test)
 
 # Modeling
 size = 1360
 X_train_subset, y_train_subset = X_train_scaled[:size], y_train[:size]
 
-best_model = SVC(C = 11, gamma = "scale", kernel = "rbf")
+best_model = SVC(C = 10 ** 0.10, gamma = 0.30, kernel = "rbf")
 best_model.fit(X_train_subset, y_train_subset)
