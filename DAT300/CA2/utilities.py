@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 import pandas as pd 
 import matplotlib.pyplot as plt
 import tensorflow as tf
+from scipy.ndimage import convolve1d
 
 def load_intel_dataset(
     root_dir="IntelImageClassification",
