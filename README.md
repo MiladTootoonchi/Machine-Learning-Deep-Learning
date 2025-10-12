@@ -2,6 +2,6 @@
 
 | Subject Code | Subject Name |
 | - | - |
-| DAT200 | Machine Learning |
-| DAT300 | Deep Learning |
+| DAT200 | Applied Machine Learning |
+| DAT300 | Applied Deep Learning |
 | MLA210 | Machine Learning With Examples From Technology and Finance |
