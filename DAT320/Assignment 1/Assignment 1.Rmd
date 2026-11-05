@@ -1,0 +1,695 @@
+---
+title: "DAT320: Compulsory Assignment 1"
+author: "Group 5: Dan Trung Nguyen, Milad Tootoonchi, Sania Minaipour"
+date: "`r Sys.Date()`"
+output:
+  pdf_document
+---
+
+# Exercise 1
+
+```{r load_libraries}
+# loading necessary packages
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(tidyr)
+```
+
+```{r energy_demand}
+# a) Data Loading
+# "energy_demand.csv" uses ,
+energy_df <- read.csv("energy_demand.csv")
+
+# Here I tried using the "dplyr" package with pipelines in order to filter and preprocess the data with one clean code block
+
+# b) Data Types
+# "energy_demand.csv"
+# state (categorical variable) | start_timestamp (date) | series_value (float)
+
+# Some of the entries are at midnight. They don't have a defined hour, minutes or seconds.
+# This mutate will add 00:00:00 to ensure proper formatting
+energy_df <- energy_df %>%
+  mutate(start_timestamp = ifelse(
+    nchar(start_timestamp) == 10,
+    paste0(start_timestamp, " 00:00:00"),
+    start_timestamp
+  )) %>%
+  mutate(state = as.factor(state),
+       # Convert to POSTIXct with hms
+       start_timestamp = as.POSIXct(start_timestamp, format = "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+       series_value = as.numeric(series_value) 
+       )
+
+print("Double check values: ---------------")
+for (i in seq_along(energy_df)) {
+  column <- energy_df[[i]]
+  col_name <- names(energy_df)[i]
+  col_class <- class(column)[1]
+  
+  print(sprintf("Column '%s' is a %s", col_name, col_class))
+}
+
+# c) Reshaping
+energy_df <- energy_df %>%
+  select(state, start_timestamp, series_value) %>%
+  pivot_wider(names_from = state,
+              values_from = series_value)
+```
+
+```{r pedestrian_counts}
+# a) Data Loading
+# "pedestrian_counts.csv" uses ;
+ped_df <- read.csv("pedestrian_counts.csv", sep = ";")
+
+# b) Data Types
+ped_df <- ped_df %>%
+  mutate(start_timestamp = as.POSIXct(start_timestamp, format = "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+         across(-start_timestamp, as.numeric)) # Select every other column except start_timestamp
+
+# c) Observing Missing Values
+# Start by finding the shape (to find amount of samples)
+dim(ped_df) # 49704 (samples) 67 (66 sensors since one is start_timestamp) 
+
+# Go through each sensor and calculate amount of NAs
+sensor_cols <- ped_df %>% select(-start_timestamp)
+na_count <- colSums(is.na(sensor_cols))
+
+# Sensors with > 0.5 missing data will be removed. This is about 24 852 samples
+keep_cols <- names(na_count[na_count < 24852])
+ped_df <- ped_df[, c("start_timestamp", keep_cols)]
+```
+
+```{r Task 1e}
+# Define a function that goes through each column, filters out NA and finds start and end time
+filter_function <- function(df) {
+  col_name <- setdiff(names(df), "start_timestamp")
+  results <- list()
+  
+  for (name in col_name) {
+    filtered_df <- df %>%
+      filter(!is.na(.data[[name]]))  
+    
+    results[[name]] <- data.frame(
+      column = name,
+      start_time = min(filtered_df$start_timestamp),
+      end_time = max(filtered_df$start_timestamp)
+    )
+  }
+  do.call(rbind, results)
+}
+
+filter_function(energy_df)
+filter_function(ped_df)
+
+```
+
+We can see that there are multiple differences between each timeframe from both dataframes: - energy_demand.csv - Every measurement starts at the same time, but they end at different dates
+
+- pedestrian_count.csv
+  - Most measurements start months apart, but most of them start at 2009-05-01. However, they all end at the same time with exception of `sensor_16`, which ends 6 months earlier.
+
+Another thing to note is that energy_demand.csv are measured in 30 minutes intervals, while pedestrian_counts.csv uses 1 hour intervals.
+
+```{r Task 1f}
+print("Energy:")
+summary(energy_df)
+
+print("")
+print("Pedestrians")
+summary(ped_df)
+```
+
+For energy:
+
+- Looking at the mean, we can see that:
+  - NSW has the highest demand
+  - VIC and QUN have about the same amount of demand
+  - TAS consumes way less demand than NSW, about 14 times less. This is reflected in its lower magnitudes.
+  - For all columns, their mean is close to their median. This means that the distribution is symmetric.
+  - NSW, VIC and TAS also have the same amount of missing values.
+
+For pedestrians:
+
+- We can see that the range of sensor values is very large on average (98, 1506)
+- Sensor 7 and 16 are missing a lot of values for some reason
+- We can also see that the mean is higher than the median for some reason. This means that the data is skewed to the right.
+
+```{r Task 1g}
+# I want to visualize "NSW" from energy, and "sensor_16" from pedestrian
+# Energy
+ggplot(data = energy_df, aes(x = start_timestamp, y = NSW)) +
+  geom_line(color = "royalblue") +
+  labs(title = "energy_demand.csv: NSW", x = "Date", y = "Energy") +
+  coord_cartesian(
+    xlim = c(as.POSIXct("2012-01-01", tz = "UTC"), 
+             as.POSIXct("2012-12-31", tz = "UTC"))
+  ) +
+  theme_minimal()
+
+# Pedestrian
+ggplot(data = ped_df, aes(x = start_timestamp, y = sensor_16)) +
+  geom_line(color = "limegreen") +
+  labs(title = "pedestrian_count.csv: sensor_16", x = "Date", y = "Pedestrians") +
+    coord_cartesian(
+    xlim = c(as.POSIXct("2012-01-01", tz = "UTC"), 
+             as.POSIXct("2012-12-31", tz = "UTC"))
+  ) +
+  theme_minimal()
+
+```
+
+```{r Task 1h}
+# Create an aggregated DataFrame
+ped_df_aggr <- ped_df %>%
+  mutate(
+    mean = rowMeans(select(., -start_timestamp), na.rm = TRUE)
+  ) %>%
+  select(start_timestamp, mean)
+
+ped_df_aggr[1:30, ]
+
+```
+
+```{r Task 1i}
+# Create a new date column, group all the dates together then find the mean
+energy_df_daily <- energy_df %>%
+  mutate(date = as.Date(start_timestamp)) %>%
+  group_by(date) %>%
+  summarise(across(-start_timestamp, ~ mean(.x, na.rm = TRUE)))
+
+
+ped_df_daily <- ped_df_aggr %>%
+  mutate(date = as.Date(start_timestamp)) %>%
+  group_by(date) %>%
+  summarise(across(-start_timestamp, ~ mean(.x, na.rm = TRUE)))
+
+energy_df_daily[1:30, ]
+ped_df_daily[1:30, ]
+```
+
+```{r Task 1j}
+# Join DataFrames together, then remove empty values
+df_concat <- full_join(energy_df_daily, ped_df_daily) %>%
+  na.omit()
+
+df_concat[1:30, ]
+```
+
+I've chosen to print out only the first 30 elements of the DataFrames. This is due to the PDF taking in every printout, meaning it would take the several thousands of lines from both DataFrames.
+
+# Exercise 2
+
+**Tasks:** a)
+
+| Assumption | Explanation | Diagnose violation |
+|------------------------|------------------------|------------------------|
+| **Linearity** | There must be a linear relationship between the regressor (X) and response (Y). In other words, one unit change of X should always result in the same amount of unit change of Y. | Use a residuals vs. fitted plot. By plotting the residuals (errors) against the predicted values, we may see how the different points behave. Fitted values appear as a line/graph, while residuals appear as scattered points. If there is a linear relationship between X and Y, then the residuals should be around zero. |
+| **Homoscedasticity** | The residuals (errors) have a constant variance at every point of the regressor. In other words, it means that the variance will be the same value anywhere. | Use a residuals vs. fitted plot. We can check the variance by looking at the vertical spread of the residuals around fitted values |
+| **Independence** | The residuals are independent from each other. | Use a residual vs. time plot. There should be no pattern in the scattered points. |
+| **Normality** | The residuals are normally distributed. | Use a quantile-quantile (Q-Q) plot. This plot will put the residuals into a quartile. We may also plot a diagonal line here. If the residuals follow this line, then they are normally distributed. In other words, a majority of these points should follow this line. |
+
+b)  We'll be using the plots provided in `diagnosticplot.Rmd`
+
+- 
+
+  ![Residuals vs Fitted](Images/Residuals%20vs%20fitted.png)
+
+- Residuals vs Fitted
+
+  - The residuals are plotted as scatter points, while the red line shows us the pattern. We use this plot to check if the model has linearity and has homoscedasticity.
+
+- 
+
+  ![Normal Q-Q](Images/Normal%20Q-Q.png)
+
+- Normal Q-Q
+
+  - The residuals are given their quantile and then plotted as scatter points. This residuals in this example are normally distributed. We can say this since they follow the normal distribution (diagonal line).
+
+- 
+
+  ![Scale-Location](Images/Scale-Location.png)
+
+- Scale-Location (or Spread-Location)\*\*
+
+  - This plots the square root of the absolute standardized residuals as scatter points. The red lines indicate the average of the points. This is also another method to check for homoscedasticity. If the red line is horizontal, then it follows.
+
+- 
+
+  ![Residuals vs Leverage](Images/Residuals%20vs%20Leverage.png)
+
+- Residuals vs Leverage
+
+  - Checks whether a point is an extreme point or not. Leverage is basically a measurement of how far a regressor (X) are from the mean of regressors. High leverage therefore means that a point an extreme value. Cook's distance is indicated by the dotted lines. The further along the x-axis a point is, the higher leverage it has. Cook's distance will create a boundary (not shown here), where the points outside will heavily affect the regression line. It may therefore be a good idea to remove those points.
+
+c)  Code taken from `diagnosticPlot.Rmd`.
+
+```{r Task 2c setup}
+library(ggplot2)
+
+set.seed(42)
+n <- 1000
+x <- 1:n
+
+# Changeable parameters
+# - Change the parameters to affect the generated data points below.
+# - You may copy this code multiple times to answer all the questions in the exercise.
+# - You may find it reasonable to argue for multiple violations from a single generated set of data points.
+
+contant <- 10
+trend <- 10
+curve_magnitue <- 0
+curve_period <- 100
+curve_shift <- 0
+normal_noise_magnitue <- 1
+norm_noise_periode <- 10000
+shift_norm_noise <- 500
+non_normal_noise_magnitue <- 0
+non_norm_noice_periode <- 10000
+shift_non_norm_noise <- 500
+
+# put y.gen into a function
+y_gen <- function(
+    contant, trend, curve_magnitue, curve_period,
+    curve_shift, normal_noise_magnitue, norm_noise_periode,
+    shift_norm_noise, non_normal_noise_magnitue,
+    non_norm_noice_periode, shift_non_norm_noise
+    ){
+  contant + trend * x +
+  curve_magnitue * sin((x/curve_period + curve_shift)*pi) + 
+  normal_noise_magnitue*cos((
+    x / norm_noise_periode + shift_norm_noise/norm_noise_periode)*pi
+    )*rnorm(n, sd = 3) +
+  non_normal_noise_magnitue*cos(
+    (x/non_norm_noice_periode + shift_non_norm_noise/non_norm_noice_periode)*pi
+  ) * rexp(n, rate = 0.2)
+  }
+
+
+
+```
+
+- **Holds all assumptions**
+
+  This can be done by setting `non_normal_noise_magnitue` and `non_norm_noice_periode` to zero.
+
+```{r Task 2c1}
+y_valid <- y_gen(
+  contant = 10,
+  trend = 10,
+  curve_magnitue = 0,
+  curve_period = 100,
+  curve_shift = 0,
+  normal_noise_magnitue = 1,
+  norm_noise_periode = 10000,
+  shift_norm_noise = 0, # Set to zero
+  non_normal_noise_magnitue = 0, # Set to zero
+  non_norm_noice_periode = 10000,
+  shift_non_norm_noise = 500
+)
+
+# Plot raw data
+p <- qplot(x, y_valid, ylab = "y") +
+  geom_point(size = 0.1) +
+  labs(title = "All Assumptions Satisfied")
+
+print(p)
+
+# Plot 4 plots (2, 2)
+lm_valid <- lm(y_valid ~ x)
+par(mfrow = c(2, 2))
+plot(lm_valid, which = c(1, 2, 3, 5)) # Rstudio has automatic plotting
+par(mfrow = c(1, 1))
+
+```
+
+- **Breaks the assumption of Homoscedasticity**
+
+  This can be done by setting `normal_noise_magnitue` to a higher number and `norm_noise_periode` to a lower one.
+
+```{r Task 2c2}
+y_no_homoscedasticity <- y_gen(
+  contant = 10,
+  trend = 10,
+  curve_magnitue = 0,
+  curve_period = 100,
+  curve_shift = 0,
+  normal_noise_magnitue = 10, # Increase. Makes noise have higher amplitude
+  norm_noise_periode = 500, # Decrease. Longer periods means longer time for noise to change
+  shift_norm_noise = 0,
+  non_normal_noise_magnitue = 0,
+  non_norm_noice_periode = 10000,
+  shift_non_norm_noise = 500
+)
+
+# Plot raw data
+p <- qplot(x, y_no_homoscedasticity, ylab = "y") +
+  geom_point(size = 0.1) +
+  labs(title = "No Homoscedasticity")
+
+print(p)
+
+# Plot 4 plots (2, 2)
+lm_no_homoscedasticity<- lm(y_no_homoscedasticity ~ x)
+par(mfrow = c(2, 2))
+plot(lm_no_homoscedasticity, which = c(1, 2, 3, 5)) # Rstudio has automatic plotting
+par(mfrow = c(1, 1))
+
+```
+
+- **Breaks the assumption of Linearity**
+
+  This can be done by increasing `curve_magnitude` and lowering .`curve_period`.
+
+```{r Task 2c3}
+y_no_linearity <- y_gen(
+  contant = 10,
+  trend = 10,
+  curve_magnitue = 250, # Increase, makes line curve
+  curve_period = 250, # Decrease, makes curve happen earlier
+  curve_shift = 0,
+  normal_noise_magnitue = 1,
+  norm_noise_periode = 10000,
+  shift_norm_noise = 0,
+  non_normal_noise_magnitue = 0,
+  non_norm_noice_periode = 10000,
+  shift_non_norm_noise = 500
+)
+
+# Plot raw data
+p <- qplot(x, y_no_linearity, ylab = "y") +
+  geom_point(size = 0.1) +
+  labs(title = "No Linearity")
+
+print(p)
+
+# Plot 4 plots (2, 2)
+lm_no_linearity <- lm(y_no_linearity ~ x)
+par(mfrow = c(2, 2))
+plot(lm_no_linearity, which = c(1, 2, 3, 5)) # Rstudio has automatic plotting
+par(mfrow = c(1, 1))
+```
+
+- **Breaks the assumption of Normality**
+
+  This can be done by setting `normal_noise_magnitue` to zero and `non_normal_noise_magnitue` to 1.
+
+```{r Task 2c4}
+y_no_normality <- y_gen(
+  contant = 10,
+  trend = 10,
+  curve_magnitue = 0,
+  curve_period = 100,
+  curve_shift = 0,
+  normal_noise_magnitue = 0, # Set to 0. Removes all normal noise
+  norm_noise_periode = 10000,
+  shift_norm_noise = 0,
+  non_normal_noise_magnitue = 1, # Set to 1. Introduces non normal noise
+  non_norm_noice_periode = 10000,
+  shift_non_norm_noise = 500
+)
+
+# Plot raw data
+p <- qplot(x, y_no_normality, ylab = "y") +
+  geom_point(size = 0.1) +
+  labs(title = "No Normality")
+
+print(p)
+
+# Plot 4 plots (2, 2)
+lm_no_normality <- lm(y_no_normality ~ x)
+par(mfrow = c(2, 2))
+plot(lm_no_normality, which = c(1, 2, 3, 5)) # Rstudio has automatic plotting
+par(mfrow = c(1, 1))
+```
+
+# Exercise 3
+
+**Tasks:**
+
+a)  
+
+```{r Task 3a}
+# a)
+corr_matrix <- cor(select(df_concat, -date))
+corr_matrix
+```
+
+These areas looks like to be from Australia. We see that NSW, VIC and SA are highly correlated. Looking at a map, we can see that these are neighboring states. This may indicate that they are sharing the same power grid. TAS isn't as correlated due to being an island outside of the mainland Australia.
+
+b)  Correlation means that something go hand in hand. In other words, it shows the relationship between variables. The higher the correlation, the more "connected" the variables are.
+
+    Causation means that variable A causes something to happen to variable B.
+
+    One of the main rules is that correlation does not imply causation. This is because even though two variables are very similar, it does not mean that one of them directly affects the other. An example of this may be the ice cream example. Ice cream sales and shark attacks both increase in frequency in the summer, however shark attacks do not cause ice cream sales to rise.
+
+c)  
+
+```{r Task 3c}
+# c)
+# 80/20 train split
+sample_count <- nrow(df_concat) # number of rows
+train_ratio <- floor(0.80 * sample_count) # find how many samples train set should have rounded down
+
+# full_train takes samples until it becomes 80% of all data. test_data takes the rest
+full_train <- df_concat[1:train_ratio, ]
+test_data <- df_concat[(train_ratio + 1):sample_count, ]
+
+# Calculate train-validation ratio
+train_count <- nrow(full_train)
+val_ratio <- floor(0.80 * train_count)
+```
+
+The reason for not wanting to shuffle the time series data before splitting is because time series data is due to autocorrelation. Shuffling before splitting would give information about future observation, called data leakage.
+
+d)  I believe scaling would be a good idea. The reason being that `pedestrian_count.csv` and `energy_demand.csv` are using different units.
+
+```{r Task 3d}
+# Split data
+train_data <- full_train[1:val_ratio, ]
+val_data <- full_train[(val_ratio + 1):train_count, ]
+
+# Calculate mean and standard deviation in order to scale properly
+# Use sapply and apply mean and sd function on all rows
+# Drop date column with [-1]
+train_mean <- sapply(train_data[-1], mean)
+train_std <- sapply(train_data[-1], sd)
+
+# Create a function for scaling
+# Take (current point - mean) / std
+scaling <- function(df, means, stds) {
+  df %>%
+    mutate(across(-date, ~ (.x - means[[cur_column()]]) / stds[[cur_column()]]) )# Use lambda function to apply to every row
+}
+
+train_scaled <- scaling(train_data, train_mean, train_std)
+val_scaled <- scaling(val_data, train_mean, train_std)
+```
+
+e)  We need to "lag" the data behind one day. Assume that you're running the prediction today. This means that today's values are yet to be known. We can therefore only use yesterday's values.
+
+```{r Task 3e}
+# Create function to lag data. lag1 = lag one day, lag7 = lag 7 days (used for model)
+lag <- function(df) {
+  df %>%
+      mutate(mean_lag1 = dplyr::lag(mean, 1), # lagged one day
+             mean_lag7 = dplyr::lag(mean, 7), # lagged 7 days
+             NSW_lag = dplyr::lag(NSW, 1),
+             VIC_lag = dplyr::lag(VIC, 1),
+             QUN_lag = dplyr::lag(QUN, 1),
+             SA_lag = dplyr::lag(SA, 1),
+             TAS_lag = dplyr::lag(TAS, 1))
+}
+# lag data
+train_lag <- lag(train_scaled)
+val_lag <- lag(val_scaled)
+
+# Create models
+# Use lm to create linear regression model
+# Choose the mean as y, and ~ (x) as regressors
+
+# (1) Lagged pedestrians only
+model_1 <- lm(mean ~ mean_lag1, data = train_lag)
+
+# (2) All interactions
+model_2 <- lm(mean ~ mean_lag1 * NSW_lag * VIC_lag * QUN_lag * SA_lag * TAS_lag, data = train_lag)
+
+# (3) All regressors, no interactions
+model_3 <- lm(mean ~ mean_lag1 + NSW_lag + VIC_lag + QUN_lag + SA_lag + TAS_lag, data = train_lag)
+
+# (4) Lagged 7 days
+model_4 <- lm(mean ~ mean_lag1 + mean_lag7, data = train_lag)
+```
+
+f)  
+
+```{r Task 3f}
+print("Model 1 -----------------------------")
+summary(model_1)
+
+print("Model 2 -----------------------------")
+summary(model_2)
+
+print("Model 3 -----------------------------")
+summary(model_3)
+
+print("Model 4 -----------------------------")
+summary(model_4)
+```
+
+| Model | $R^2$  |
+|-------|--------|
+| 1     | 0.0897 |
+| 2     | 0.2406 |
+| 3     | 0.1488 |
+| 4     | 0.6126 |
+
+Looking at the $R^2$ values, we can see `model_1` has the lowest $R^2$ value at 0.0897 While `model_4` has the highest at 0.6126. Higher means that the model is able to explain more. This makes sense as `model_1` only has data from one day, meaning it can't predict accurately. While `model_4` has data from a week earlier. It can therefore check the trends on weekdays and weekends. This means that its ability to explain is much better.
+
+| Coefficient | Model 1        | Model 2        | Model 3        | Model 4        |
+|---------------|---------------|---------------|---------------|---------------|
+| mean_lag1   | \<2e-16 \*\*\* | 0.034 \*       | 0.0007 \*\*\*  | 2.3e-08 \*\*\* |
+| mean_lag7   | –              | –              | –              | \<2e-16 \*\*\* |
+| NSW_lag     | –              | 0.043 \*       | 0.001 \*\*     | –              |
+| VIC_lag     | –              | 6.8e-10 \*\*\* | 4.4e-11 \*\*\* | –              |
+| QUN_lag     | –              | 8.3e-10 \*\*\* | 9.8e-13 \*\*\* | –              |
+| SA_lag      | –              | 0.037 \*       | 7.2e-11 \*\*\* | –              |
+| TAS_lag     | –              | 0.218          | 0.707          | –              |
+
+More amount of \* means stronger evidence. Confidence may get lower as model grows larger because it has to juggle between more values. More features means that the model has to focus on more. This means that the focus on each individual feature gets lower and confidence drops. If multiple features are correlated with each other, then having multiple will repeat the same information multiple times.
+
+g)  
+
+```{r Task 3g}
+# Create a function to calculate metrics
+metrics <- function(model, data) {
+  pred_y <- predict(model, newdata = data)
+  true_y <- data$mean
+  
+  # Remove NA elements
+  ok <- !is.na(pred_y) & !is.na(true_y)
+  pred_y <- pred_y[ok]
+  true_y <- true_y[ok]
+  
+  rmse <- sqrt(mean((true_y - pred_y)^2))
+  r2 <- 1 - sum((true_y - pred_y)^2) / sum((true_y - mean(true_y))^2)
+  c(RMSE = rmse, R2 = r2) # To get data out
+}
+
+models = list(model_1, model_2, model_3, model_4)
+
+# Calculate metrics, store in dataframe
+# Using functions(m) makes a local function
+results <- data.frame(
+  model = paste0("model_", 1:4),
+  RMSE_train = sapply(models, function(m) metrics(m, train_lag)["RMSE"]),
+  R2_train = sapply(models, function(m) metrics(m, train_lag)["R2"]),
+  RMSE_val = sapply(models, function(m) metrics(m, val_lag)["RMSE"]),
+  R2_val = sapply(models, function(m) metrics(m, val_lag)["R2"])
+)
+
+results
+```
+
+Looks like `model_4` has the best metrics. It has both the lowest root mean squared error and the highest $R^2$ in both training and validation data. `model_2` looks fine at first, but since it looks at every interaction, it becomes overfitted. We can see this as the the scores failing in the validation set.
+
+h)  In this case, `model_4` is my best model. We need to start by scaling the full data.
+
+```{r Task 3h}
+# Calculate metrics for full training data
+full_mean <- sapply(full_train[-1], mean)
+full_std <- sapply(full_train[-1], sd)
+
+# Scale both train and test on the metrics
+full_train_scaled <- scaling(full_train, full_mean, full_std)
+test_scaled <- scaling(test_data, full_mean, full_std)
+
+# Lag train and test
+full_train_lag <- lag(full_train_scaled)
+test_lag <- lag(test_scaled)
+
+# (1) Lagged pedestrians only
+model_1_full <- lm(mean ~ mean_lag1, data = full_train_lag)
+
+# (2) All interactions
+model_2_full <- lm(mean ~ mean_lag1 * NSW_lag * VIC_lag * QUN_lag * SA_lag * TAS_lag, data = full_train_lag)
+
+# (4) Lagged 7 days
+model_4_full <- lm(mean ~ mean_lag1 + mean_lag7, data = full_train_lag)
+
+full_models = list(model_1_full, model_2_full, model_4_full)
+
+# Calculate metrics using previous code
+results_h <- data.frame(
+  model = paste0("model_", c(1, 2, 4)),
+  RMSE_train = sapply(full_models, function(m) metrics(m, full_train_lag)["RMSE"]),
+  R2_train = sapply(full_models, function(m) metrics(m, full_train_lag)["R2"]),
+  RMSE_test = sapply(full_models, function(m) metrics(m, test_lag)["RMSE"]),
+  R2_test = sapply(full_models, function(m) metrics(m, test_lag)["R2"])
+)
+
+results_h
+```
+
+As expected, the model that did good on the validation set also did good on the full training set. We can see that `model_4`'s metrics are significantly better than the rest. It managed to do better on both the training and test data.
+
+`model_2` manages to do better on the training data, but due to it being overfitted, it even does worse than `model_1` in the test data.
+
+i)  When switching from the hourly to the daily dataset, we decrease the variance. This is because we're taking the different variations that's happening throughout the day and then taking the mean. In other words, all the variance gets "compressed" to a single point.
+
+    RMSE is based on the absolute average size of all the residuals. This is independent of variance. It will therefore not change. However $R^2$ relies on the total sum of squares (SST). This is affected by variance. One thing that can affect the $R^2$ are that some hours will be way different than other hours. Rush hour will have a lot more energy use and pedestrians than in the middle of the night for example.
+
+    Therefore, having an hourly dataset will give you a higher $R^2$ score, as there are more details. The $R^2$ will therefore decrease when switching from the hourly to daily dataset.
+
+# Exercise 4
+
+**Tasks:**
+
+a)  Correlation is a measurement of the linear relationship between two variables. This is measured from $[-1, 1]$. High positive correlation means the variables move in the same direction, while high negative correlation means that they move in opposite directions. This is unitless.
+
+    Covariance also measures if variables move in the same direction or not. However, it is dependent on the original units of said variables. It may therefore be more difficult to compare them. Correlation can be thought as a standardized covariance.
+
+b)  Proof $\text{Corr}(\alpha X, Y) = \text{sign}(\alpha) \text{Corr}(X, Y)$
+
+    Start by using the definition of the correlation:
+
+    $$\text{Corr}(\alpha X, Y) = \frac{\text{Cov}(\alpha X, Y)}{\sqrt{\text{Var}(\alpha X)\text{Var}(Y)}}$$
+
+    Substitute using $\text{Cov}(\alpha X, Y) = \alpha \text{Cov}(X, Y)$ and $\text{Var}(\alpha X) = \alpha^2 \text{Var}(X)$:
+
+    $$\text{Corr}(\alpha X, Y) = \frac{\alpha \text{Cov}(X, Y)}{\sqrt{\alpha^2 \text{Var}(X) \text{Var}(Y)}}$$
+
+    Take the squared $\sqrt{\alpha^2}$ out of the root: $$\text{Corr}(\alpha X, Y) = \frac{\alpha \text{Cov}(X, Y)}{\sqrt{\alpha^2}\sqrt{{\text{Var}(X) \text{Var}(Y)}}}$$
+
+    Isolate $\frac{\alpha}{\sqrt{\alpha^2}}$ from rest of equation: $$\text{Corr}(\alpha X, Y) = \frac{\alpha}{\sqrt{\alpha^2}} \cdot \frac{\text{Cov}(X, Y)}{\sqrt{{\text{Var}(X) \text{Var}(Y)}}}$$
+
+    Now, replace $\frac{\alpha}{\sqrt{\alpha^2}} = \text{sign}(\alpha)$ substitute $\text{Corr}(X, Y) = \frac{\text{Cov}(X, Y)}{\sqrt{\text{Var}(X) \text{Var}(Y)}}$
+
+    $$\text{Corr}(\alpha X, Y) = \text{sign}(\alpha) \text{Corr}(X, Y)$$
+
+    ------------------------------------------------------------------------
+
+    Proof $\text{Corr}(X + \beta, Y) = \text{Corr(X, Y)}$:
+
+    Start by using the definition of correlation: $$\text{Corr}(X + \beta, Y) = \frac{\text{Cov}(X + \beta, Y)}{\sqrt{\text{Var}(X + \beta)\text{Var}(Y)}}$$
+
+    Substitute with $\text{Cov}(X + \beta, Y) = \text{Cov}(X, Y)$ and $\text{Var}(X + \beta) = \text{Var}(X)$: $$\text{Corr}(X + \beta, Y) = \frac{\text{Cov}(X, Y)}{\sqrt{\text{Var}(X)\text{Var}(Y)}}$$
+
+    Recall that $\text{Corr}(X, Y) = \frac{\text{Cov}(X, Y)}{\sqrt{\text{Var}(X) \text{Var}(Y)}}$: $$\text{Corr}(X + \beta, Y) = \text{Corr}(X, Y)$$
+
+c)  Partial correlation is the correlation between two variables after removing the effect of another variable. In my explanation I will use X and Y as "main" variables, and Z as the variable that gets removed.
+
+    The formula is a method to calculate the correlation between X and Y without computing the residuals. $\rho$ is the correlation coefficient with the subtext telling which one it is. The numerator of the formula is calculating the difference between the correlation of X and Y ( $\rho_{XY}$ ) against the relationship between these and Z. $$ \rho(X, Y|Z) = \frac{\rho_{XY} - \rho_{XZ} \rho_{ZY}}{\sqrt{1 - \rho^2_{XZ}} \sqrt{1 - \rho^2_{ZY}}} $$
+
+    Three examples are:
+
+    - X = income, Y = spending, Z = age. We can look at income and spending while taking age into account.
+
+    <!-- -->
+
+    - X = ice cream sales, Y = people at the beach, Z = temperature. We can look at the relationship while taking temperature into account.
+
+    - X = exercise, Y = body weight, Z = age. We can look at exercise and body weight while taking age into account.
+
+d)  For $\alpha X$, multiplying $X$ by a changes the correlation by $\text{sign}(a)$. The same happens for partial correlation. Therefore, $$\text{Corr}(\alpha X, Y | Z) = \text{sign}(\alpha) \text{Corr}(X, Y | Z)$$ For $X + b$, adding a constant does not change the correlation. The same is true for partial correlation. Therefore, $$\text{Corr}(X + b, Y | Z) = \text{Corr}(X, Y | Z)$$ For $cZ$, multiplying $Z$ by $c$ does not change the partial correlation. This is because the sign change happens in both correlations with Z, so the changes cancel each other out. Therefore, $$\text{Corr}(X, Y | cZ) = \text{Corr}(X, Y | Z)$$ So, partial correlation has similar properties to normal correlation when we multiply a variable or add a constant.

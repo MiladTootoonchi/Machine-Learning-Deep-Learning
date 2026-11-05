@@ -1,0 +1,77 @@
+### Inspiration for exercise
+- https://www.andrew.cmu.edu/user/achoulde/94842/homework/regression_diagnostics.html
+- You may find this useful to solve the task.
+
+```{r}
+library(ggplot2)
+
+set.seed(42)
+n <- 1000
+x <- 1:n
+
+# Changeable parameters
+# - Change the parameters to affect the generated data points below.
+# - You may copy this code multiple times to answer all the questions in the exercise.
+# - You may find it reasonable to argue for multiple violations from a single generated set of data points.
+
+contant <- 10
+trend <- 10
+curve_magnitue <- 0
+curve_period <- 100
+curve_shift <- 0
+normal_noise_magnitue <- 1
+norm_noise_periode <- 10000
+shift_norm_noise <- 500
+non_normal_noise_magnitue <- 0
+non_norm_noice_periode <- 10000
+shift_non_norm_noise <- 500
+
+# put y.gen into a function
+y_gen <- function(
+    contant, trend, curve_magnitue, curve_period,
+    curve_shift, normal_noise_magnitue, norm_noise_periode,
+    shift_norm_noise, non_normal_noise_magnitue,
+    non_norm_noice_periode, shift_non_norm_noise
+    ){
+  contant + trend * x +
+  curve_magnitue * sin((x/curve_period + curve_shift)*pi) + 
+  normal_noise_magnitue*cos((
+    x / norm_noise_periode + shift_norm_noise/norm_noise_periode)*pi
+    )*rnorm(n, sd = 3) +
+  non_normal_noise_magnitue*cos(
+    (x/non_norm_noice_periode + shift_non_norm_noise/non_norm_noice_periode)*pi
+  ) * rexp(n, rate = 0.2)
+  }
+```
+
+```{r}
+y.gen <- y_gen(contant, trend, curve_magnitue, curve_period,
+               curve_shift, normal_noise_magnitue, norm_noise_periode,
+               shift_norm_noise, non_normal_noise_magnitue,
+               non_norm_noice_periode, shift_non_norm_noise)
+
+p <- qplot(x, y.gen, ylab = "y") +
+  geom_point(size = 0.1) +
+  labs(title = "Data generate for linear regrestion")
+
+# Display the plot
+print(p)
+```
+
+```{r}
+summary(lm.gen)
+```
+
+
+```{r}
+lm.gen <- lm(y.gen ~ x)
+plot(lm.gen, which = 1)   # Residuals vs fitted (constant variance, homoscedasticity)
+plot(lm.gen, which = 2)   # QQ-plot, Standardized residuals vs theoretical quantiles (normality)
+plot(lm.gen, which = 3)   # sqrt(|Residuals|) vs fitted (homoscedasticity)
+plot(lm.gen, which = 5)   # Standardized residuals vs leverage (outliers)
+```
+
+
+
+
+

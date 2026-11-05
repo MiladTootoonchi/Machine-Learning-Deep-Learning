@@ -1,0 +1,760 @@
+---
+title: "DAT320: Compulsory Assignment 3"
+author: "Group 5: Dan Trung Nguyen, Milad Tootoonchi, Sania Minaipour"
+date: "`r Sys.Date()`"
+output:
+  pdf_document
+editor_options:
+  markdown:
+    wrap: none
+---
+
+# Set-up
+
+```{r warning_suppression, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,   # Suppresses warning messages
+  message = FALSE    # Suppresses package startup and function messages
+)
+```
+
+## Packages
+
+```{r loading_packages}
+library(dplyr)
+library(parsnip)
+library(modeltime)
+library(tidymodels)
+library(recipes)
+library(timetk)
+library(rsample)
+library(glmnet)
+library(tidyverse)
+library(tidymodels)
+```
+
+## Random config
+
+```{r global_config}
+rseed = 105
+set.seed(rseed)
+```
+
+------------------------------------------------------------------------
+
+# Exercise 1, Univariate modeling
+
+## Task a)
+
+We were provided with `sensor_network.csv`. This dataset contains three columns: `date`, `id` and `count`, where `count` is our target variable and `date` is our temporal axis. We can differentiate the different sensors by sorting with `id`. The sensor readings range from 2009 to 2014.
+
+It looks like `modeltime` and `parsnip` are packages used for forecasting a timeseries. These can be combined with `recipe` to create pipelines.
+
+## Task b)
+
+```{r}
+# Start by reading csv and converting columns into appropriate formats
+sensor_network_df <- read.csv("sensor_network.csv")
+
+sensor_network_df <- sensor_network_df %>%
+  mutate(date = as.Date(date),
+         count = as.numeric(count))
+
+# We select "sensor_12" for forecasting
+selected_sensor <- sensor_network_df %>%
+  filter(id == "sensor_12")
+```
+
+We may visualize the data by plotting the `count` (y) against `date` (x). This'll make it easier to spot any trends or seasonalities. It'll also show us if there are any outliers or extreme points.
+
+In addition to this, we will be plotting a histogram in order to easily view the distribution of the data. We may also perform a log-transform and plot the result. Both contain the information, however they represent the data in different perspectives:
+
+- Normal histogram shows the overall distribution. Outliers can skew this
+
+- A log-transformed histogram makes it such that we can compare the bins as multiples. This makes the outliers tell less, and the data may look like a bell curve. We can also use this for a Q-Q plot. If the data follows the Gaussian distribution, it will appear as a straight line in the quantile-quantile plot.
+
+- We may also use box-plot in order to visualize the weekly counts. The reason being that people are usually more active on the weekends rather than the weekdays.
+
+```{r}
+dates <- selected_sensor$date # Make code more compact
+counts <- selected_sensor$count
+
+# Normal plot
+plot(x = dates,
+     y = counts,
+     xlim = range(dates),
+     xlab = "Date",
+     ylab = "Pedestrian counts",
+     main = "Daily counts: sensor_12")
+
+# Histogram
+hist(x = counts, breaks = 40)
+
+# Log-transformed histogram + Q-Q plot
+hist(x = log(counts), breaks = 40)
+qqnorm(log(counts)); qqline(log(counts))
+
+# Box-plots
+selected_sensor$weekday <- factor(format(selected_sensor$date, "%u"), # Create a new column called "weekday" which contains the name of the day
+                                  levels = 1:7,
+                                  labels = c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+
+boxplot(count ~ weekday, data = selected_sensor, # plot count, but split by "weekday" column
+        main = "Counts by weekday: sensor_12", xlab = "", ylab = "Pedestrian counts")
+```
+
+Normal plot:
+
+- We can see that there is a seasonality in the data. The pedestrian counts form peaks at the new year. The outliers are also near these peaks, which may indicate a lot of parties or events happening at these times. We also see that the overall level of pedestrians stay the same across all the years, which shows that there's no clear long-term trend.
+
+Histogram:
+
+- We see that the sensor usually detects 100-200 pedestrians on average. However, we can also see the events spoken of earlier further along the x-axis. The distribution is right skewed, which is ideal for a log-transformation.
+
+Log-transformed histogram + Q-Q plot:
+
+- After a log-transform, we see that the data forms a Gaussian curve. This indicates that the data is approximately normally distributed. It is still slightly right skewed, but is way less than the original histogram. This can easily be seen with the Q-Q plot. If we were to train a model based on this data, the outliers would have way less of an influence.
+
+Box-plot:
+
+- The box-plot reveals a weekly seasonality in the data. It looks like the median (black line) increases the further in the week, especially on the weekend. We can also see that most of the outliers are on Saturday and Sunday, with fewer on the weekdays.
+
+## Task c)
+
+```{r}
+splits <- selected_sensor %>%
+  time_series_split(date_var = date,
+                    assess = "12 months", # how much becomes test data?
+                    cumulative = TRUE) # makes sure all data that is not test becomes training
+
+train_data <- training(splits)
+test_data <- testing(splits)
+
+splits %>% 
+  tk_time_series_cv_plan() %>% # needed to convert split to something we can plot. (converts it to "time_series_cv_plan" object)
+  plot_time_series_cv_plan(date, # plots split
+                           count,
+                           .interactive = FALSE)
+```
+
+As shown, the training-test split is plotted in two different colors. The training set contains data from September 2009 to July 2013, while the test set contains data from July 2013 to July 2014. This is about a 80/20 train-test split.
+
+## Task d)
+
+```{r}
+# 1. Baseline: seasonal naive (weekly pattern, m = 7)
+model_snaive <- naive_reg(seasonal_period = 7) %>%
+  set_engine("snaive") %>%
+  fit(count ~ date, data = train_data)
+
+# 2. ARIMA-class: auto ARIMA (seasonal, m = 7)
+model_arima <- arima_reg(seasonal_period = 7) %>%
+  set_engine("auto_arima") %>%
+  fit(count ~ date, data = train_data)
+
+# 3. Exponential smoothing: Holt-Winters without trend, additive season
+model_ets <- exp_smoothing(seasonal_period = 7,
+                           error  = "additive",
+                           trend  = "none",   # tested, and this performed best
+                           season = "additive") %>%
+  set_engine("ets") %>%
+  fit(count ~ date, data = train_data)
+
+# 4. Prophet
+model_prophet <- prophet_reg(seasonality_weekly = TRUE,
+                             seasonality_yearly = TRUE,
+                             seasonality_daily  = FALSE) %>%
+  set_engine("prophet") %>%
+  fit(count ~ date, data = train_data)
+
+print(model_snaive)
+print(model_arima)
+print(model_ets)
+print(model_prophet)
+```
+
+# KOMMENTER
+
+## Task e)
+
+```{r}
+# Modeltime Table
+models_tbl <- modeltime_table(model_snaive,
+                              model_arima,
+                              model_ets,
+                              model_prophet)
+
+# Modeltime Calibrate (on the test set)
+calibration_tbl <- models_tbl %>%
+  modeltime_calibrate(new_data = test_data)
+calibration_tbl
+
+# Modeltime Accuracy
+calibration_tbl %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+# Modeltime Forecast: visualise the test set
+calibration_tbl %>%
+  modeltime_forecast(new_data = test_data,
+                     actual_data = selected_sensor) %>%
+  plot_modeltime_forecast(.interactive = FALSE)
+```
+
+ARIMA(1,1,4)(0,0,2)[7] came out as the best model on the test set. It has the lowest MAE (69.0), RMSE (118) and MASE (0.90), and it is the only model with a MASE below 1, so it is the only one that actually beats a naive forecast. Seasonal naive, ETS(A,N,A) and Prophet all land close to each other (MAE 98-107, MASE 1.28-1.39) and are all worse than the benchmark. In other words, the extra complexity of ETS and Prophet didn't pay off for this sensor.
+
+It makes sense that ETS chose no trend component (the N), since we saw in task b) that there is no clear long-term trend. All the models pick up the weekly pattern and the typical level of the series, but none of them manage to predict the big spikes (up to around 1000 near new year and other events). These irregular outliers drive most of the error, which is why RMSE is so much larger than MAE. R-squared is low for every model (0.006-0.105) and isn't very informative here: ARIMA has the lowest R-squared but the best MAE.
+
+The prediction intervals are also very wide and dip below zero, which doesn't make sense for count data. A log-transform could help with that. Finally, there are some limitations to keep in mind: the test set only covers 12 months, the models were run with default settings and no tuning, and the spikes could probably be handled better with external regressors such as holiday indicators.
+
+## Task f)
+
+```{r}
+plot_one <- function(id, title) {
+  calibration_tbl %>%
+    filter(.model_id == id) %>%
+    modeltime_forecast(new_data = test_data,
+                       actual_data = selected_sensor %>% filter(date >= as.Date("2013-01-01"))) %>%  # show last ~ 6 months of training for context
+    plot_modeltime_forecast(.interactive = FALSE, .title = title)
+}
+
+p_arima   <- plot_one(2, "ARIMA(1,1,4)(0,0,2)[7]")
+p_snaive  <- plot_one(1, "Seasonal naive")
+p_prophet <- plot_one(4, "Prophet")
+
+p_arima
+p_snaive
+p_prophet
+```
+
+ARIMA:
+
+The forecast is almost a flat line at around 160 for the whole test year. Only the first few days move a little, and after that it just stays the same. So the model does not show the weekly pattern in the long forecast, even if it is in the model. The actual data goes up and down all the time, but the forecast does not follow it. It is still the best model in the table, which says something about how hard this data is, since a flat line beats the others. The model also misses all the big spikes (up to over 1000 in autumn 2013).
+
+Seasonal naive:
+
+The red forecast is the same weekly wave repeated again and again for the whole year. It goes up and down between about 180 and 300, and it never changes, because the model only copies the last week of the training data. The wave fits the real data a little, but the real data is much more messy. The model also misses all the big spikes, like the ones over 900 in autumn 2013. The grey area is the 95% prediction interval, and it shows the range where the real pedestrian counts are expected to be with 95% chance. The grey prediction interval is very wide and goes under zero, which does not make sense for pedestrian counts.
+
+Prophet:
+
+The Prophet forecast also has a weekly wave, but the level moves slowly over the year. It goes up toward winter, with the highest point around the new year, and then goes down again in spring and summer 2014. This is the yearly seasonality, and it is the main difference from the seasonal naive plot. The forecast follows the normal level of the data fairly well, but it still misses the big spikes. The prediction interval is wide and goes under zero here too.
+
+The three models look very different in the plots. ARIMA gives an almost flat line at around ca. 170, seasonal naive gives a weekly wave that repeats the same way all year, and Prophet gives a weekly wave where the level also moves slowly over the year. Prophet looks the most realistic, since it follows the changes in the data a little more. But the scores in the table say something else: ARIMA is the best, and Prophet is not better than the simple seasonal naive. This is because the real data has many big spikes that no model can predict, and these spikes cause most of the error. A flat line close to the normal level does well on MAE, because most days are normal and only a few days are very high. All three models also have a wide prediction interval that goes under zero, which does not make sense for pedestrian counts.
+
+------------------------------------------------------------------------
+
+# Exercise 2, Multivariate modeling
+
+## Task a)
+
+Exogenous variables are variables that are not affected by the target variable, but may influence it. In other words, it's a one way influence. The `Prophet` and `XGBoost` models are defined with the `modeltime` package. Start by defining the models:\
+- A Prophet model with exogenous regressors\
+- A boosted-tree model (XGBoost)
+
+But before doing this, we will have to preprocess the data. We've already done a train-test split, but this data still contains all variables. This includes variables with low variance, meaning they are almost constant and will give little to no useful information for the model. We should remove these. This can be done with a `recipe` from the `recipes` package.
+
+Since the `Prophet` model and `XGBoost` model require different data, we will create one recipe for each one. One thing to note is that `step_timeseries_signature()` will create new features with duplicate information. These are seen as `.xts` or `.iso` which are different methods to tell the date. `.xts` counts from 0 instead of 1, and `.iso` counts weeks differently. We may remove these.
+
+```{r}
+# Start by preprocessing the data
+rec_prophet <- recipe(count ~ ., train_data) %>% # Define target, this is "count"
+  step_rm(weekday) %>% # Remove column before splitting "date" (will create duplicates)
+  step_timeseries_signature(date) %>%  # Will use the "date" column to create multiple other features, making the model multivariate
+  step_rm(matches("(\\.iso$)|(\\.xts$)")) %>% # Remove duplicate calendar features
+  step_zv(all_predictors()) %>% # Remove zero variance (constant) variables. In this case it is for the sensor id
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% # One-hot encode all categorical variables
+  step_nzv(all_predictors()) # Remove near zero variance variables (created by one-hot encoding)
+
+# Prophet model
+model_prophet_multivariate <- workflow() %>%
+  add_model( # Define which model we want
+    prophet_reg(mode = "regression") %>% set_engine("prophet")
+  ) %>%
+  add_recipe(rec_prophet) %>% # Perform preprocessing
+  fit(train_data) # Fit model on training data
+
+model_prophet_multivariate
+```
+
+XGBoost can't have a `date` column, so we remove it. We can reuse the `recipe` from our Prophet model.
+
+```{r}
+# Recipe for XGBoost
+rec_xgboost <- rec_prophet %>% # Same preprocessing steps as prophet, but remove "date" column
+  step_rm(date)
+
+# XGBoost model
+model_xgboost <- workflow() %>%
+  add_model(
+    boost_tree("regression") %>% set_engine("xgboost")
+  ) %>%
+  add_recipe(rec_xgboost) %>%
+  fit(train_data)
+
+model_xgboost
+```
+
+## Task b)
+
+We can create an overview of the model performance with `modeltime_table`. Then we will calibrate it using the `modeltime_calibrate()` function.
+
+```{r}
+# Create a table with all models we want to compare
+model_table <- modeltime_table(
+  model_prophet,
+  model_prophet_multivariate,
+  model_xgboost
+)
+
+# Calibrate table with testing data
+calib_table <- model_table %>%
+  modeltime_calibrate(
+    new_data = test_data
+  )
+
+calib_table
+
+# Performance metrics
+calib_table %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+```
+
+From the performance metrics, we can see that the multivariate Prophet model performs slightly better than the univariate in the error metrics (MAE 105.34 vs 105.36, and MASE 1.39 vs 1.37), while the univariate scores slightly better in R². However, the difference is so small that they may be considered to have the same performance. An explanation for this is that the univariate model already captures weekly and yearly seasonality (`seasonality_weekly` and `seasonality_yearly` are set to `TRUE`), meaning the multivariate model gets very little new information.
+
+## Task c)
+
+We will be forecasting with the XGBoost model as it has the lowest MAE, MAPE, MASE and SMAPE of the three models. The model will predict on average the closest to the actual values, however this is only a slight improvement compared to the other models. We can forecast using the `modeltime_forecast()` function.
+
+```{r}
+calib_table %>%
+  filter(.model_id == 3) %>% # Only select the third model XGBoost
+  modeltime_forecast( # Forecast (predict) the "count" column
+    new_data = test_data,
+    actual_data = selected_sensor # Sensor 12
+  ) %>%
+  plot_modeltime_forecast(.interactive = FALSE)
+
+```
+
+We can see from the plot that the XGBoost model manages to capture most of the weekly pattern, this is seen as the red plot rising and falling each week, while being in the same range as the actual data. It also predicts a huge spike around the start of 2014, meaning it has captured that there should be a spike at the start of each year. However, the forecast misses on the other events as they don't have a seasonal pattern. Another thing to note is that the prediction interval (light grey plot) is very wide and even goes negative. This does not make sense as there can't be a negative amount of pedestrians at any time.
+
+In short, the forecasting model manages to capture weekly and yearly patterns, however it misses on the irregular patterns.
+
+------------------------------------------------------------------------
+
+# Exercise 3, Global modeling
+
+## Task a)
+
+```{r}
+# id must be a factor for step_mutate_at(id, fn = droplevels)
+data_tbl <- sensor_network_df %>%
+  mutate(id = as.factor(id)) %>%
+  select(id, date, count)
+
+# Check coverage and missing values per sensor
+data_tbl %>%
+  group_by(id) %>%
+  summarise(start = min(date), end = max(date), n_na = sum(is.na(count)))
+
+# Train/test split on all sensors, one year as test
+splits_all <- data_tbl %>%
+  time_series_split(assess = "12 months", cumulative = TRUE)
+
+splits_all
+
+# Visualise the split for three sensors (sensor_12 + two others)
+plot_ids <- c("sensor_2", "sensor_8", "sensor_12")   # check names with levels(data_tbl$id)
+
+splits_all %>%
+  tk_time_series_cv_plan() %>%
+  filter(id %in% plot_ids) %>%
+  ggplot(aes(x = date, y = count, color = .key)) +
+  geom_line() +
+  facet_wrap(~ id, ncol = 1, scales = "free_y") +
+  labs(title = "Train/test split for three sensors", color = "Split")
+
+```
+
+## Task b)
+
+We think global modelling is a good choice for sensor_2 and sensor_12. Because they show clear yearly seasonality. The same peaks appear around the same time each year, for example at the new year. sensor_12 contains more irregularities, as there are multiple thin lines. These may indicate special days that only happen for that year. sensor_2 is more generalized where each year appears to look the same.
+
+sensor_8 is very different from the other sensors. The first thing to note is that the range is much smaller (0-300), and unlike the other sensors, this one shows a clear increasing trend. However, the yearly seasonality less clear to see.
+
+Using sensor_12 for global modelling may not be a good idea, as it contains special events that only happen for that year. This would only act as noise for the model, and potentially create false peaks. sensor_2 however seems a lot more consistent with its yearly seasonality, making it a good choice for global forecasting.
+
+Global forecasting will learn from multiple similar data series and predict based on those. It heavily favors datasets with similar and consistent patterns such as sensor_2. Since sensor_12 contains random occurrences, which a global model wouldn't appreciate. This is because the model will be an accumulation of multiple time series, meaning only the "main" patterns would remain. A benefit of this is that one would be able to create a whole time series with no prior values.
+
+## Task c)
+
+```{r}
+# Global recipe: same preprocessing as in Exercise 2.
+# The difference is that "id" now varies (18 sensors), so it is kept and one-hot encoded.
+rec_global <- recipe(count ~ ., training(splits_all)) %>%
+  step_timeseries_signature(date) %>%                      # Calendar features from "date"
+  step_rm(matches("(\\.iso$)|(\\.xts$)"), date_mday) %>%   # Remove duplicate calendar features
+  step_zv(all_predictors()) %>%                            # Remove zero variance variables
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% # One-hot encode id and categorical features
+  step_nzv(all_predictors()) %>%                           # Remove near zero variance variables
+  step_rm(date)                                            # XGBoost can't have a date column
+
+# Check that all 18 sensor columns are kept
+prep(rec_global) %>% summary() %>% filter(str_detect(variable, "^id_"))
+
+# Global XGBoost model: same engine and default settings as in Exercise 2,
+# but fitted on the training data from all 18 sensors
+model_xgboost_global <- workflow() %>%
+  add_model(
+    boost_tree("regression") %>% set_engine("xgboost")
+  ) %>%
+  add_recipe(rec_global) %>%
+  fit(training(splits_all))
+
+model_xgboost_global
+```
+
+The training went as expected, the `rmse` decreased after each epoch. The `rmse` started around 377 and ended up at 138.
+
+## Task d)
+
+```{r}
+# Modeltime table for the global model
+model_table_global <- modeltime_table(model_xgboost_global)
+
+# Calibrate on the test set (all sensors), keeping track of the sensor id
+calib_global <- model_table_global %>%
+  modeltime_calibrate(
+    new_data = testing(splits_all),
+    id       = "id"
+  )
+
+# Accuracy across all sensors (global)
+calib_global %>%
+  modeltime_accuracy(acc_by_id = FALSE) %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+# Accuracy for each sensor
+calib_global %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+# Local XGBoost from Exercise 2 (trained on sensor_12 only)
+acc_local <- calib_table %>%
+  filter(.model_id == 3) %>%
+  modeltime_accuracy() %>%
+  mutate(training = "Local (Exercise 2)")
+
+# Global XGBoost, sensor_12 only
+acc_global <- calib_global %>%
+  modeltime_accuracy(acc_by_id = TRUE) %>%
+  filter(id == "sensor_12") %>%
+  mutate(training = "Global (Exercise 3)")
+
+bind_rows(acc_local, acc_global) %>%
+  select(training, mae, mape, mase, smape, rmse, rsq)
+```
+
+The global model is evaluated on all 18 sensors. Across all sensors it gets
+
+- MAE = 106.49
+
+- MASE = 0.31 .
+
+  Per sensor, the accuracy varies a lot: it is best for sensor_13 (MASE 0.46) and worst for sensor_10(MASE 2.38). 13 of the 18 sensors have a MASE below 1, so for most sensors the global model beats a naive forecast. The sensors have very different levels, so the absolute errors are hard to compare (for example, MAE is 222 for sensor_7 but only 32 for sensor_8). We therefore focus on metrics when comparing sensors. MAPE and MASE don't always agree, for example sensor_13 has a MAPE of 92 but the best MASE. This is because MAPE is inflated on days with very low counts, so we rely mostly on MASE. For our selected sensor_12, the globally trained XGBoost got:
+
+- MAE = 99.1
+
+- RMSE = 137.0
+
+- MASE = 1.29,
+
+  compared to MAE = 102.8, RMSE = 150.3 and MASE = 1.34 for the locally trained model in Exercise 2.
+
+  XGBoost therefore performed slightly better when trained globally. The difference is small (about 4% on MAE), and the largest gain is on RMSE (about 9%), so the global model mostly makes smaller large errors. A possible explanation is that the global model captures the yearly seasonalities. One example could be the new year spike, which appears on multiple sensors.
+
+  However, sensor_12 is still one of the sensors the global model handles worst. Its MASE is above 1 for both models, so neither beats a naive forecast. This fits what we saw in task b): sensor_12 has large irregular spikes that are specific to this sensor, the global model won't be able to predict these.
+
+## Task e)
+
+```{r}
+plot_ids <- c("sensor_2", "sensor_8", "sensor_12")
+
+calib_global %>%
+  modeltime_forecast(
+    new_data    = testing(splits_all) %>% filter(id %in% plot_ids),
+    actual_data = data_tbl %>% filter(id %in% plot_ids, date >= as.Date("2013-01-01")),  # last ~6 months of training for context
+    conf_by_id  = TRUE
+  ) %>%
+  group_by(id) %>%
+  plot_modeltime_forecast(
+    .facet_ncol  = 1,
+    .interactive = FALSE
+  )
+
+```
+
+The blue plot is the actual data for the sensors. The red plot is the global XGBoost forecast each of them. We can determine how well the forecasting model performs by overlapping both plots over each other. The more similar the red plot follows the actual data, the more the model has captured the patterns. For all three sensors the model stays at roughly the right level and follows the weekly pattern. However, the model misses the big picture:
+
+- sensor_12:
+
+  - Model fails to capture the large spikes since there are no other sensors that show similar data. The global model can therefore not predict them. The large spikes appear do not appear at all, but there is a false spike at New Years Eve 2014. The weekly seasonality is captured, as we can see that the grey intervals appear to have "spikes", which corresponds to the increasing amount of people throughout the week. The interval is very wide due to the model not being confident in the values.
+
+- sensor_2:
+
+  - The model captures the weekly pattern very well, because there a visible spike each week. Similarly to sensor_12, the model fails to capture the more extreme values, as seen on the New Years Eve and the period of 2014-01 and 2014-07. Unlike sensor_12, the model is more confident in the values of sensor_2, as the grey interval is smaller.
+
+- sensor_8:
+
+  - The model predicts values close to the actual values, but sometimes its a bit too optimistic. This can be seen in the range of the forecast, where the lowest value never goes is higher than the actual lowest value. There is a clear weekly pattern, where it rises and falls like the actual values. But the model is not confident about those values, like you in the grey interval.
+
+------------------------------------------------------------------------
+
+# Exercise 4, Recursive forecasting
+
+## Task a)
+
+```{r}
+lag_df <- selected_sensor %>%
+  select(date, count) %>%
+  tk_augment_lags(count, .lags = 1:365) %>%
+  drop_na()
+
+splits_lag <- time_series_split(lag_df,
+                                date_var = date,
+                                assess = "12 months",
+                                cumulative = TRUE)
+
+train_lag <- training(splits_lag)
+test_lag  <- testing(splits_lag)
+
+# Store the last 365 rows, needed to start the recursive forecast later
+train_tail <- tail(train_lag, 365)
+
+dim(train_lag)
+dim(test_lag)
+range(train_lag$date)
+range(test_lag$date)
+```
+
+We added lags 1 to 365 of the pedestrian count as features and removed the rows with missing values. This removes the first year of data, so the training set now starts in September 2010 instead of September 2009. The training set has 1013 days (2010-09-25 to 2013-07-03) and the test set has 365 days (2013-07-04 to 2014-07-03). The test set is the same year as in Exercise 1, so the results can be compared. We also saved the last 365 rows of the training data (train_tail), because the recursive model needs them to start its forecast.
+
+## Task b)
+
+### A linear model with no predictors
+
+```{r}
+model_lm0 <- linear_reg() %>%
+  set_engine("lm") %>%
+  fit(count ~ 1, data = train_lag)
+
+model_lm0
+```
+
+### A multivariate linear model with calendar features as exogenous variables
+
+```{r}
+rec_cal <- recipe(count ~ date, data = train_lag) %>%
+  step_timeseries_signature(date) %>%
+  step_rm(matches("(iso$)|(xts$)|(hour)|(minute)|(second)|(am.pm)")) %>%
+  step_rm(date) %>%
+  step_zv(all_predictors()) %>%
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  step_normalize(all_numeric_predictors())
+
+glmnet_spec <- linear_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet")
+
+wf_cal <- workflow() %>%
+  add_recipe(rec_cal) %>%
+  add_model(glmnet_spec)
+
+# Time-ordered cross-validation inside the training set
+cv_folds <- time_series_cv(train_lag,
+                           date_var = date,
+                           initial = "18 months",
+                           assess = "3 months",
+                           skip = "3 months",
+                           cumulative = TRUE)
+
+grid_cal <- grid_regular(penalty(range = c(-2, 2)), mixture(), levels = c(10, 5))
+
+tuned_cal <- tune_grid(wf_cal,
+                       resamples = cv_folds,
+                       grid = grid_cal,
+                       metrics = metric_set(mae, rmse))
+
+best_cal <- select_best(tuned_cal, metric = "mae")
+best_cal
+
+model_cal <- wf_cal %>%
+  finalize_workflow(best_cal) %>%
+  fit(train_lag)
+```
+
+### A recursive linear model using the lags of the original series as predictors
+
+```{r}
+rec_lag <- recipe(count ~ ., data = train_lag) %>%
+  step_rm(date) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+wf_rec <- workflow() %>%
+  add_recipe(rec_lag) %>%
+  add_model(glmnet_spec)
+
+grid_rec <- grid_regular(penalty(range = c(0, 3)), mixture(), levels = c(10, 5))
+
+tuned_rec <- tune_grid(wf_rec,
+                       resamples = cv_folds,
+                       grid = grid_rec,
+                       metrics = metric_set(mae, rmse))
+
+best_rec <- select_best(tuned_rec, metric = "mae")
+best_rec
+
+# Rebuilds the lags from the model's own predictions during forecasting
+lag_transformer <- function(data) {
+  data %>% tk_augment_lags(count, .lags = 1:365)
+}
+
+model_rec <- wf_rec %>%
+  finalize_workflow(best_rec) %>%
+  fit(train_lag) %>%
+  recursive(transform = lag_transformer,
+            train_tail = train_tail)
+```
+
+Model 1 (no predictors): This model only has an intercept, so it predicts the same value every day. The value is 181.2, which is the mean of the training data.
+
+Model 2 (calendar features): The tuning chose a penalty of about 36 and a mixture of 0, which means pure ridge regression. So the model keeps all the calendar features but shrinks their coefficients quite a lot.
+
+Model 3 (recursive, lags): The tuning chose a penalty of 10 and a mixture of 0.75, so it is mostly lasso with a bit of ridge. The lasso part sets many of the 365 lag coefficients to zero, which is useful when the lags are so strongly correlated.
+
+## Task c)
+
+```{r}
+# Plain refit of model 3 (without recursive())
+fit_rec_plain <- wf_rec %>%
+  finalize_workflow(best_rec) %>%
+  fit(train_lag)
+
+# Manual recursive loop
+hist_counts <- train_tail$count # last 365 real values
+n_test <- nrow(test_lag)
+pred_loop <- numeric(n_test)
+
+for (i in 1:n_test) {
+  # lag k = the k-th most recent value in the history
+  lags <- rev(hist_counts)[1:365]
+  new_row <- as_tibble(as.list(setNames(lags, paste0("count_lag", 1:365)))) %>%
+    mutate(date = test_lag$date[i], count = NA_real_)
+
+  pred_loop[i] <- predict(fit_rec_plain, new_data = new_row)$.pred
+  hist_counts <- c(hist_counts, pred_loop[i])   # prediction becomes the newest "lag"
+}
+
+head(pred_loop, 10)
+range(pred_loop)
+```
+
+```{r}
+results <- tibble(
+  date  = test_lag$date,
+  truth = test_lag$count,
+  `LM no predictors` = predict(model_lm0, new_data = test_lag)$.pred,
+  `GLMNET calendar`  = predict(model_cal, new_data = test_lag)$.pred,
+  `GLMNET recursive` = pred_loop
+)
+
+mae_train <- mean(abs(diff(train_lag$count)))   # scale for MASE
+
+acc <- results %>%
+  pivot_longer(-c(date, truth), names_to = "model", values_to = "estimate") %>%
+  group_by(model) %>%
+  summarise(mae  = mean(abs(truth - estimate)),
+            mape = mean(abs((truth - estimate) / truth)) * 100,
+            mase = mae / mae_train,
+            rmse = sqrt(mean((truth - estimate)^2)),
+            rsq  = suppressWarnings(cor(truth, estimate)^2)) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+acc
+```
+
+Comment on the results:
+
+The simple linear model with no predictors is the best one, with MAE 67.2 and MASE 0.94. It is a flat line at the training mean (181), and it is the only model with MASE below 1. The recursive model is second (MAE 86.8, MASE 1.21), and the calendar model is the worst (MAE 94.4, MASE 1.32). So the extra features did not help, and the more complex models are worse than a flat line. The reason is the same as in Exercise 1: the data has big spikes that no model can predict, and the normal days are close to the average. The calendar model probably learned a seasonal pattern from the training years that is not the same in the test year. The recursive model is better than the calendar model, but still worse than the flat line. The recursive forecast moves between about 113 and 363 and follows a weekly wave, but it cannot predict the spikes either. The R-squared is only 0.1 for both models, so they explain very little of the variation. The R-squared for the first model is NA because it predicts a constant.
+
+Strengths and weaknesses of recursive modelling:
+
+A strength is that the model uses the recent level and the autocorrelation of the series, and it does not need any future exogenous variables. It is also a flexible way to use a linear model for forecasting. A weakness is that the errors build up, because each prediction is used as input for the next one, so over 365 days the forecast can drift or even explode. This happened to us when we first used recursive(), and we had to write the loop by hand. It is also slow, since it predicts one day at a time. It has 365 correlated lags, so it needs strong regularisation, and it still cannot predict the spikes, because the lags only contain past values.
+
+## Task d)
+
+```{r}
+full_df <- lag_df   # train + test together
+
+# 365 future dates after the last observed day
+future_dates <- seq(max(full_df$date) + 1, by = "day", length.out = 365)
+
+fit_lm_full  <- linear_reg() %>%
+  set_engine("lm") %>%
+  fit(count ~ 1, data = full_df)
+
+fit_cal_full <- wf_cal %>%
+  finalize_workflow(best_cal) %>%
+  fit(full_df)
+
+fit_rec_full <- wf_rec %>%
+  finalize_workflow(best_rec) %>%
+  fit(full_df)
+
+range(future_dates)
+```
+
+```{r}
+future_tbl <- tibble(date = future_dates)
+
+pred_lm  <- predict(fit_lm_full,  new_data = future_tbl)$.pred
+pred_cal <- predict(fit_cal_full, new_data = future_tbl)$.pred
+
+# Manual recursive loop, starting from the last 365 real days
+hist_counts <- tail(full_df$count, 365)
+pred_rec <- numeric(365)
+
+for (i in 1:365) {
+  lags <- rev(hist_counts)[1:365]
+  new_row <- as_tibble(as.list(setNames(lags, paste0("count_lag", 1:365)))) %>%
+    mutate(date = future_dates[i], count = NA_real_)
+
+  pred_rec[i] <- predict(fit_rec_full, new_data = new_row)$.pred
+  hist_counts <- c(hist_counts, pred_rec[i])
+}
+
+range(pred_lm)
+range(pred_cal)
+range(pred_rec)
+```
+
+```{r}
+forecast_df <- tibble(date = future_dates,
+                      `LM no predictors` = pred_lm,
+                      `GLMNET calendar`  = pred_cal,
+                      `GLMNET recursive` = pred_rec) %>%
+  pivot_longer(-date, names_to = "model", values_to = "count")
+
+ggplot() +
+  geom_line(data = selected_sensor %>% filter(date >= as.Date("2013-01-01")),
+            aes(x = date, y = count), colour = "grey40") +
+  geom_line(data = forecast_df,
+            aes(x = date, y = count, colour = model)) +
+  labs(title = "One year forecast into the future: sensor_12",
+       x = "Date", y = "Pedestrian counts", colour = "Model") +
+  theme_minimal()
+```
+
+We refitted the three models on all the data (train and test) and forecasted one year into the future, from July 2014 to July 2015. The forecasts look reasonable, because they stay close to the normal level of the sensor, around 190 people per day. The linear model with no predictors is a flat line at 186.5, which is the mean of all the data. The calendar model (range 135 to 270) has a weekly wave and a slow yearly shape, with higher values in autumn and winter and lower values in spring and summer 2015. The recursive model (range 160 to 292) also follows a weekly wave and stays stable the whole year. It does not drift away or explode, which is a good sign. The forecasts are not perfect, though. None of them has the big spikes we see in the old data (up to over 1000), so they would miss events like new year again. The recursive model also gets less reliable the further ahead it goes, because it uses its own predictions as input. Since we have no test data for 2014-2015, we cannot check how good these forecasts are. We can only say that they look realistic compared to the past.

@@ -1,0 +1,1847 @@
+<<<<<<< HEAD
+---
+title: "DAT320: Compulsory Assignment 1"
+author: "Group 5: Dan Trung Nguyen, Milad Tootoonchi, Sania Minaipour"
+date: "`r Sys.Date()`"
+output:
+  pdf_document
+---
+
+# Set-up
+
+```{r warning_suppression, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,   # Suppresses warning messages
+  message = FALSE    # Suppresses package startup and function messages
+)
+```
+
+## Packages
+
+```{r installing_packages, include=FALSE}
+#install.packages(c("tuneR", "seewave", "ggplot2", "dplyr", "tidyr", 
+#                   "gridExtra", "patchwork", "zoo", "ggrastr"))
+```
+
+```{r loading_packages}
+library(tuneR)
+library(seewave)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(patchwork)
+library(zoo)
+library(ggrastr)
+```
+
+## Random config
+
+```{r global_config}
+rseed = 105
+set.seed(rseed)
+```
+
+## Global helper function
+
+```{r global_helpers}
+plot_spectrogram <- function(amplitude_df, p_title, hide_yticks=TRUE, dpi=150) {
+  long_df <- amplitude_df %>%
+    pivot_longer(
+      cols = -time_sec, 
+      names_to = "frequency", 
+      values_to = "amplitude"
+    )
+  
+  p <- ggplot(long_df, aes(x=time_sec, y=frequency, fill=log(amplitude))) +
+    geom_tile_rast(dpi=dpi) +
+    scale_fill_viridis_c(option = "magma", na.value = "white", 
+                         name = "log(amplitude)") +
+    labs(title = p_title, x = "Time (seconds)", y = "Frequency (kHz)") +
+    theme_minimal()
+  
+  if (hide_yticks) {
+    p <- p + theme(axis.text.y = element_blank())
+  }
+  
+  return(p)
+}
+```
+
+------------------------------------------------------------------------
+
+# Exercise 1, Working With Spectral Data
+
+## Task a)
+
+We will be moving the audio files into a folder called "Audio".
+
+```{r ex1_task1_chunk1}
+# Load data
+indigo <- readMP3(filename = "./Audio/indigo_ta_meg_med.mp3")
+```
+
+## Task b + c)
+
+```{r ex1_task2_chunk1}
+print_audio_info <- function(wave) {
+  cat("Sample rate:", wave@samp.rate, "Hz\n")
+  cat("Number of samples:", length(wave@left), "\n")
+  cat("Duration:", length(wave@left)/wave@samp.rate, "seconds\n") # total samples / frequency
+}
+```
+
+b)  Sample rate works as the resolution of a continuous wave. Since a continuous wave contains an infinite amount of points, we have to record it as a discrete wave in order to store it digitally. This requires us to set a sample rate, which decides how many times we're going to "look at" or sample this wave. Higher sample rates means that we're looking at this wave multiple times, and we may find small fluctuations from the sound wave. However, this will create more samples, resulting in more storage space and processing power needed.
+
+c)  We may print out the length of the audio by calculating it. An audio sound wave is created by having a specified \# of samples, where \# of them are played each second. This is called frequency, and the unit is in Hz.
+
+For this example, 11025 samples are played each second. There are 1478592 in total, so: $$ \frac{1478592}{11025} \approx 134 \approx 2 \text{ mins and } 14 \text { s}$$ So, we can fix this code by taking the number of samples and divide it by the frequency.
+
+```{r ex1_task2_chunk2}
+print_audio_info(wave = indigo)
+```
+
+## Task d)
+
+```{r ex1_task4_chunk1}
+# Short-Time Fourier Transform
+window_length = 2048 # Long windows means narrower frequency bins. Music prefers that
+overlap = 75
+indigo_stft <- spectro(
+  wave= indigo, 
+  wl=window_length, 
+  ovlp=overlap,
+  complex = FALSE,
+  norm = FALSE,
+  dB = NULL,
+  plot = FALSE
+)
+```
+
+About the three parameters:
+
+| Parameter | Function |
+|------------------------------------|------------------------------------|
+| `wl` | Window length. Controls the window length of the window for the Fourier transform. Higher `wl` means larger window, and therefore higher resolution. |
+| `ovlp` | Overlap. Controls how much the window should move after each Fourier transform. An overlap of 75% would mean that the next window will contain 75% of the samples from the previous window. |
+| `complex` | Chooses if the Fourier transform should use complex numbers for the plot or not. If set to `TRUE`, then it will return a matrix containing real and imaginary numbers. |
+
+## Task e)
+
+```{r ex1_task5_chunk1}
+print_stft_info <- function(stft_result) {
+  cat("Frequency bins :", nrow(stft_result$amp), "\n")
+  cat("Total STFT frames:", ncol(stft_result$amp), "\n")
+  cat("Min. frequency:", min(stft_result$freq), "kHz\n")
+  cat("Max. frequency:", max(stft_result$freq), "kHz\n")
+}
+```
+
+```{r ex1_task5_chunk2}
+print_stft_info(indigo_stft)
+```
+
+The Nyquist frequency is the highest possible frequency that a specific sample rate allows. This is at half the sample rate due to how a wave oscillates, as it needs two samples per cycle to be captured. The Short-Time Fourier Transform splits the signal into short windows and computes the frequency content of each one. From the function `print_audio_info()`, we can see that the sample rate is 11025 Hz or 11.025 kHz. i) This means that our Nyquist frequency is about 5.5 kHz (5512.5 Hz) which corresponds to the output of `print_stft_info()`.
+
+The number of frequency bins is also determined by this frequency. A frequency bin is basically a method to gather multiple frequencies to combine them into a larger bin. This is what this type of Fourier transform does. ii) This means that the Nyquist frequency acts as a hard cap on how many unique frequencies are possible, this also affects our amount of bins. We may calculate the number of bins using the formula:
+
+$$\text{number of bins} = \frac{\text{Nyquist frequency}}{\Delta f}$$ where $\Delta f$ is the frequency resolution, which is defined by the sample rate divided by window length.
+
+$$ \Delta f = \frac{\text{sample rate}}{\text{wl}} $$ Plugging in the numbers, we get:
+
+$$ \begin{aligned}
+\Delta f &= \frac{11025 \text{ Hz}}{2048} \approx 5.38 \text{ Hz} \\
+\text{number of bins} &= \frac{5512.5 \text{ Hz}}{5.38 \text{ Hz}} \approx 1024
+\end{aligned} $$
+
+Which corresponds to the output from `print_stft_info()`.
+
+## Task f)
+
+```{r ex1_task6_chunk1}
+get_amplitude_df <- function(stft_result, amplitude_matrix) {
+  amplitude_matrix <- t(amplitude_matrix)
+  colnames(amplitude_matrix) <- 
+    paste0("freq_", round(stft_result$freq, 3), "kHz")
+  amplitude_df <- as.data.frame(amplitude_matrix)
+  amplitude_df$time_sec <- stft_result$time
+  return(amplitude_df)
+}
+```
+
+```{r ex1_task6_chunk2}
+# Helper function already does all the heavy work. We just need to replace the "???" with our function
+amp_df <- get_amplitude_df(stft_result = indigo_stft, amplitude_matrix=indigo_stft$amp)
+plot_spectrogram(amplitude_df = amp_df, p_title = "Amplitude spectrogram of 'Indigo ta meg med'")
+```
+
+The first thing to note about this spectrogram is how the colors describe the song. Brighter parts mean that the frequency was stronger, while darker means it was weaker. In other words, the bins had a larger value if they were brighter.
+
+At the top, we can see that there is a line where most of the frequencies above have little to no value. This appears as purple. However, there are some sharp lines going through this purple rectangle. A reason to this happening may be due to a low-pass filter, where higher frequencies are dropped off or compression (the file is in the `.mp3` format). The lines stretch across the whole frequency axis with a constant yellow color. A filter works by reducing the amplitude of high frequencies, and this means some sounds may go through it. This is usually really loud sounds. We can say that because the line is a constant yellow color, meaning the sound was strong across all frequencies at once.
+
+We can also see that there are multiple vertical lines consisting of red. This shows us that there are generally lower values of each frequency. This corresponds to the pure instrumental part of the song such as the intro or the flute solo at 50s.
+
+One last thing to note is that the lower part of the spectrogram is the brightest. This shows us that the song uses instruments that produce lower frequencies.
+
+------------------------------------------------------------------------
+
+# Exercise 2, Principal Component Analysis
+
+## Task a)
+
+```{r ex2_task1_chunk1}
+get_banded_amp_df <- function(stft_res) {
+  freq_bands <- data.frame(
+    band = c(
+      "kHz_0_01",
+      "kHz_01_025",
+      "kHz_025_05",
+      "kHz_05_1",
+      "kHz_1_2",
+      "kHz_2_4",
+      "kHz_4_547"
+    ),
+    lower = c(0, 0.1, 0.25, 0.5, 1, 2, 4),
+    upper = c(0.1, 0.25, 0.5, 1, 2, 4, max(stft_res$freq))
+  )
+  
+  frequencies <- stft_res$freq
+  amplitude_matrix <- stft_res$amp
+  band_matrix <- matrix(
+    NA,
+    nrow = length(stft_res$time),
+    ncol = nrow(freq_bands)
+  )
+  
+  colnames(band_matrix) <- freq_bands$band
+  
+  for (i in seq_len(nrow(freq_bands))) {
+    idx <- frequencies >= freq_bands$lower[i] &
+           frequencies < freq_bands$upper[i]
+    
+    band_matrix[, i] <- colMeans(
+      amplitude_matrix[idx, , drop = FALSE],
+      na.rm = TRUE
+    )
+  }
+  
+  band_df <- as.data.frame(band_matrix)
+  band_df$time_sec <- stft_res$time
+  return(band_df)
+}
+```
+
+```{r ex2_task1_chunk2}
+banded_df <- get_banded_amp_df(stft_res = indigo_stft)
+plot_spectrogram(
+  amplitude_df = banded_df,
+  "Banded Amplitude spectrogram of 'Indigo ta meg med'", 
+  hide_yticks=FALSE
+  )
+```
+
+This spectrogram appears to be more "blocky" than the last one. This is due to us aggregating the 1024 different frequency bins into 7 wider bands. This causes the resolution of the spectrogram to drop a lot, resulting in horizontal lines.
+
+However, this spectrogram may give us a better overview of the music. This is because the small fluctuations in the frequencies are being averaged into larger bands, meaning that noise will affect the spectrogram less.
+
+The band containing frequencies from 0-0.1 kHz now has multiple purple sections. This makes it easier to see that the instruments that created lower frequencies weren't used in the flute solos. The other spectrogram did show us this with the darker red spots on the bottom, but here it is significantly easier to view.
+
+Another thing to note is that the bands are not uniform, the lower frequencies are getting a lot more representation than the higher frequencies. This is a good idea because of how human hearing works. A doubling of frequency corresponds to one octave, which we can see with the bands doubling in width each time.
+
+## Task b)
+
+Before performing PCA, we need to remove the time column. The purpose of performing PCA is to get the most important information from the bands, performing PCA with `time_sec` would therefore not make any sense.
+
+The argument `center` ensures that every band is centered around zero. This is done by subtracting the mean of each band. PCA tries to find the directions of maximum variance around the mean, so this is required.
+
+The argument `scale.` will scale the bands so they have a variance of one (unit variance). This is due to the different amplitude values, meaning the band with the highest variance would dominate the other ones. Scaling this makes sure every band has the same weight.
+
+```{r ex2_task2_chunk1}
+indigo_pca <- banded_df %>%
+  select(-time_sec) %>%
+  prcomp(center=TRUE, scale.=TRUE)
+```
+
+## Task c)
+
+```{r ex2_task3_chunk1}
+calculate_pca_var <- function(pca_res) {
+  var_explained <- (pca_res$sdev^2 / sum(pca_res$sdev^2)) * 100
+  cum_var <- cumsum(var_explained)
+
+  pca_variance <- data.frame(
+    PC = seq_along(var_explained),
+    Variance = var_explained,
+    Cumulative = cum_var
+  )
+  return(pca_variance)
+}
+
+plot_scree <- function(varaince_df, p_title) {
+  p <- ggplot(
+    varaince_df,
+    aes(x = PC, y = Variance)
+  ) +
+    geom_col(fill = "steelblue") +
+    geom_line(
+      aes(y = Cumulative / 2, group = 1),
+      color = "darkred",
+      linewidth = 1
+    ) +
+    geom_point(aes(y = Cumulative / 2), color = "darkred", size = 2) +
+    scale_y_continuous(
+      name = "Variance Explained (%)",
+      sec.axis = sec_axis(
+        ~ . * 2,
+        name = "Cumulative Variance (%)"
+      )
+    ) +
+    scale_x_continuous(breaks = varaince_df$PC
+    ) +
+    labs(title=p_title, x = "Principal Component") +
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex2_task3_chunk2}
+pca_var_df <- calculate_pca_var(pca_res = indigo_pca)
+plot_scree(pca_var_df, "Scree plot: Indigo PCA")
+```
+
+This plot consists of two plots; the blue bar plots and the red line plot. The blue plots are for the "Variance Explained (%)", which shows us how much each principal component explains the data's variance. It looks like PC1 explains about 55% of the total variance.
+
+The red plot is for the "Cumulative Variance (%)". It describes the total amount of "Variance Explained" from the x amount of PCs.
+
+We can use this to find how many PCs are necessary to explain 90% of the variance. Start from the right axis and search for 90%, it is the first horizontal line under 100%. Going from this, we see that the line intersects the plot between PC3 and PC4. We therefore need at least 4 principal components to describe at least 90% of the variance.
+
+## Task d)
+The scores are the coordinates of each observation (each time window) from the original data projected into the principal component space. These appear as scattered points on a 2-axis graph.
+
+Loadings are weights that show how much, and in which direction, each band influenced the PCs. A PC is a combination of all the frequency bands with the loadings as weights.
+
+### Trenger vi disse??
+
+```{r ex2_task4_chunk1}
+plot_pc_scatter <- function(scores_df, PC_x, PC_y, xlab, ylab, p_title="") {
+  p <- ggplot(
+    scores_df,
+    aes(x=.data[[PC_x]], y=.data[[PC_y]])
+  ) +
+    geom_point(alpha = 0.6, size = 1) +
+    labs(title = p_title, x = PC_x, y = PC_y) +
+    theme_minimal()
+  
+  return(p)
+}
+```
+
+```{r ex2_task4_chunk2}
+pca_scores <- as.data.frame(indigo_pca$x)
+pca_scores$time_sec <- banded_df$time_sec # Insert time column from "banded_df"
+
+p1 <- plot_pc_scatter(
+  scores_df = pca_scores, PC_x="PC1", PC_y="PC2", p_title="PC1 vs PC2"
+  )
+p2 <- plot_pc_scatter(
+  scores_df = pca_scores, PC_x="PC1", PC_y="PC3", p_title="PC1 vs PC3"
+  )
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+## Task e)
+```{r}
+plot_scores_over_time <- function(scores_df, PC_x, p_title) {
+  pca_long <- scores_df %>%
+    select(time_sec, .data[[PC_x]]
+    ) %>%
+    pivot_longer(
+      cols = c(.data[[PC_x]]), names_to = "Component", values_to = "Score"
+    )
+  
+  p <- ggplot(
+    pca_long,
+    aes(x=time_sec, y=Score, color=Component)
+  ) +
+    geom_line(alpha = 0.8) +
+    labs(
+      title = p_title,
+      x = "Time (seconds)",
+      y = "Score"
+    ) +
+    theme_minimal()
+  return(p)
+}
+```
+
+
+```{r ex2_task5_chunk2}
+p1 <- plot_scores_over_time(
+  pca_scores, PC_x="PC1", p_title="Principal Components scores vs Time"
+  )
+p2 <- plot_scores_over_time(
+  pca_scores, PC_x="PC2", p_title=""
+  )
+grid.arrange(p1, p2, ncol=1)
+```
+We can compare this score plot against our banded spectrogram. When the scores plot dips to a negative value, the spectrogram contains a large amount of purple, especially in the low bands. And when it scores high, the amplitude across all bands is higher (lighter colors). PC1 will most likely be capturing the total amplitude across all bands for each time window.
+
+
+## Task f)
+```{r ex2_task6_chunk1}
+loadings_df <- as.data.frame(indigo_pca$rotation)
+loadings_df
+```
+As mentioned earlier, the loadings show how much each band affects the principal components. PC1 has positive loadings of similar size across all bands, so its score is high when all bands are loud and low when all bands are quiet. PC1 therefore represents the overall energy, which confirms our interpretation in Task e).
+
+PC2 has positive loadings for the three lowest bands and negative loadings for the rest. A high score means the section has more low frequencies, for example from bass, while a low score means more high frequencies.
+
+PC3 works similarly to PC2, but focuses on the middle bands. It shows the balance between the mid frequencies and both extremes. PC4–PC7 each explain only a small share of the variance and have no clear pattern, so they may describe noise.
+
+------------------------------------------------------------------------
+
+# Exercise 3, Imputation of Missing Values
+ 
+## Task a)
+ 
+```{r ex3_task1_chunk1}
+flute <- readMP3(filename = "flute_solo.mp3")
+print_audio_info(wave = flute)
+```
+ 
+## Task b)
+```{r ex3_task2_chunk1}
+wl_flute = 2048
+ovlp_flute = 75
+stft_res_flute <- spectro(
+  wave=flute, 
+  wl=wl_flute, 
+  ovlp=ovlp_flute,
+  complex = TRUE,
+  norm = FALSE,
+  dB = NULL,
+  plot = FALSE
+)
+```
+We use the same window length and overlap as in Exercise 1. The only difference is `complex = TRUE`, which makes `spectro()` return the raw complex STFT values instead of only their magnitudes. Each value contains both the amplitude and the phase of a frequency bin in a given frame.
+ 
+ 
+## Task c)
+When we set complex = TRUE, every value in the STFT becomes a complex number. You can think of each one as holding two pieces of information about a frequency in a given frame: how loud it is (the amplitude) and where in its cycle the wave is when the frame starts (the phase). The inverse Fourier transform needs both parts to turn each frame back into a time signal.
+ 
+If we only keep the amplitude, the phase information is lost. We still know which frequencies are present and how strong they are, but not how they line up in time. Many different sounds can have the exact same amplitude spectrum, so there is no single wave we can go back to. The phase also matters because the frames overlap. When the frames are added back together, the phase decides whether the waves line up and rebuild the original signal, or end up cancelling each other out and smearing the sound.
+ 
+## Task d)
+ 
+```{r ex3_task4_chunk1}
+flute_complex <- stft_res_flute$amp
+flute_amp <- abs(flute_complex)
+flute_phase <- Arg(flute_complex)
+```
+ 
+## Task e)
+ 
+```{r ex3_task5_chunk1}
+flute_amp_df <- get_amplitude_df(
+    stft_res=stft_res_flute, 
+    amplitude_matrix= flute_amp
+  )
+```
+ 
+```{r ex3_task5_chunk2}
+plot_spectrogram(amplitude_df=flute_amp_df, "Amplitude spectrogram of the flute solo")
+## Task f)
+ 
+```{r ex3_task6_chunk1}
+remove_time_samples <- function(amplitude_df, missing_fraction) {
+  frequency_cols <- setdiff(names(amplitude_df), "time_sec")
+  n_frames <- nrow(amplitude_df)
+  n_missing <- floor(n_frames * missing_fraction)
+  missing_idxs <- sort(sample(seq_len(n_frames), size=n_missing, replace=FALSE))
+  spectral_missing <- amplitude_df
+  spectral_missing[missing_idxs, frequency_cols] <- NA
+  print_missing_df_info(spectral_missing)
+  return(list(spectral_missing, missing_idxs))
+}
+print_missing_df_info <- function(temporal_df) {
+  frequency_cols <- setdiff(names(temporal_df), "time_sec")
+  missing_indicator <- rowSums(is.na(temporal_df[frequency_cols])) > 0
+  cat("Missing time frames:", sum(missing_indicator), "\n")
+  cat("Time frames with values:", sum(!missing_indicator), "\n")
+  cat("Percentage missing:", round(100 * mean(missing_indicator), 2), "%\n")
+  gap_rle <- rle(missing_indicator)
+  gap_lengths <- gap_rle$lengths[gap_rle$values]
+  cat("Number of gaps:", length(gap_lengths), "\n")
+  cat("Mean gap length:", round(mean(gap_lengths), 2), "frames\n")
+  cat("Median gap length:", median(gap_lengths), "frames\n")
+  cat("Longest gap:", max(gap_lengths), "frames\n")
+}
+```
+ 
+```{r ex3_task6_chunk2}
+missing_fraction = 0.8
+missing_res <- remove_time_samples(amplitude_df=flute_amp_df, 
+                                      missing_fraction=missing_fraction
+                                    )
+amp_missing_df <- missing_res[[1]] 
+missing_idx <- missing_res[[2]] 
+```{r ex3_task6_chunk3}
+plot_spectrogram(amplitude_df=amp_missing_df, p_title="Flute solo with 80% of time frames missing")
+
+## Task g)
+ 
+```{r ex3_task7_chunk1}
+impute_random <- function(x) {
+  x[is.na(x)] <- sample(na.omit(x), sum(is.na(x)), replace = TRUE)
+  x
+}
+ 
+impute_mean <- function(x) {
+  x[is.na(x)] <- mean(x, na.rm=TRUE)
+  x
+}
+ 
+apply_imputation <- function(data, method) {
+  frequency_cols <- setdiff(names(data), "time_sec")
+  result <- data
+  for (column in frequency_cols) {
+    result[[column]] <- method(data[[column]])
+  }
+  cat("Remaining NA:", sum(is.na(result[frequency_cols])), "\n")
+  result
+}
+```
+ 
+```{r ex3_task7_chunk2}
+imputed_random = apply_imputation(amp_missing_df, impute_random)
+imputed_mean = apply_imputation(amp_missing_df, impute_mean)
+impute_interp <- function(x) na.approx(x, na.rm = FALSE, rule = 2)
+imputed_interp = apply_imputation(amp_missing_df, impute_interp)
+
+## Task h)
+ 
+```{r ex3_task8_chunk1}
+evaluate_method <- function(original, imputed, method_name, missing_idx) {
+  frequency_cols <- setdiff(names(original), "time_sec")
+  true_values <- as.matrix(original[missing_idx, frequency_cols])
+  predicted_values <- as.matrix(imputed[missing_idx, frequency_cols])
+ 
+  errors <- predicted_values - true_values
+  rmse <- sqrt(mean(errors^2))
+  mae <- mean(abs(errors))
+ 
+  cat("Method:",method_name, "| RMSE:", rmse, "| MAE:", mae, "\n")
+}
+```
+ 
+```{r ex3_task8_chunk2}
+evaluate_method(flute_amp_df, imputed_random, "Random", missing_idx)
+evaluate_method(flute_amp_df, imputed_mean, "Mean", missing_idx)
+evaluate_method(flute_amp_df, imputed_interp, "Linear interpolation", missing_idx)
+
+## Task i)
+ 
+```{r ex3_task9_chunk1}
+p_original <- plot_spectrogram(flute_amp_df, "Original flute solo")
+p_mean <- plot_spectrogram(imputed_mean, "Mean imputation")
+p_random <- plot_spectrogram(imputed_random, "Random imputation")
+p_interp <- plot_spectrogram(imputed_interp, "Linear interpolation")
+ 
+grid.arrange(p_original, p_mean, p_random, p_interp, ncol = 1)
+
+## Task j)
+ 
+```{r ex3_task10_chunk1}
+reconstruct_complex_stft <- function(
+    imputed_df, original_complex, original_phase
+    ) {
+  frequency_cols <- setdiff(names(imputed_df), "time_sec")
+  amp <- t(as.matrix(imputed_df[, frequency_cols]))
+  amp * exp(1i * original_phase)
+}
+ 
+make_wave <- function(stft_mat, wl, ovlp) {
+  w <- istft(
+    stft_mat,
+    f = audio_data_flute@samp.rate,
+    wl = wl,
+    ovlp = ovlp,
+    wn = "hanning",
+    output = "Wave"
+  )
+  sig <- as.numeric(w@left)
+  mx <- max(abs(sig), na.rm = TRUE)
+  if (mx > 0) {
+    sig <- sig / mx
+  }
+  sig_int <- as.integer(round(sig * 32767))
+  w <- Wave(left=sig_int, samp.rate=w@samp.rate, bit=16)
+}
+```
+ 
+```{r ex3_task10_chunk2}
+audio_data_flute <- flute
+stft_random <- reconstruct_complex_stft(
+  imputed_df=imputed_random, original_complex=flute_complex, original_phase=flute_phase
+    )
+ 
+wave_random <- make_wave(stft_mat=stft_random, wl=wl_flute, ovlp=ovlp_flute)
+play(wave_random)
+```
+
+------------------------------------------------------------------------
+
+# Exercise 4, STL and Autocorrelation
+
+## Task a)
+
+```{r ex4_task1_chunk1}
+plot_aggregated_amp <- function(agg_df, p_title) {
+  p <- ggplot(agg_df, aes(x=time_sec, y=agg_amp)) +
+    geom_line(color = "darkblue", alpha = 0.8) +
+    labs(
+      title = p_title,
+      x = "Time (seconds)",
+      y = "Amplitude"
+    ) + 
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex4_task1_chunk2}
+agg_df <- amp_df %>% mutate(
+    agg_amp = apply(select(., -time_sec), 1, "median", na.rm=TRUE)
+  )
+
+plot_aggregated_amp(agg_df = agg_df, "Median amplitude over all frequencies")
+
+# Checks
+dim(agg_df)
+head(agg_df[, c("time_sec", "agg_amp")])
+summary(agg_df$agg_amp)
+```
+
+We calculated the median amplitude over all frequencies for each frame. The new data frame has 2884 rows. Each frame is about 0.0465 seconds long, so the song is about 134 seconds. The median amplitude is 19.07 and the mean is 26.28. The mean is higher because a few very loud frames pull it up. The plot shows loud and quiet sections of the song. Inside the loud sections, the amplitude goes up and down very fast, which may be a repeating rhythm. We will look for this rhythm with the autocorrelation function.
+
+
+
+## Task b)
+
+```{r ex4_task2_chunk1}
+acf_result <- acf(agg_df$agg_amp, plot=FALSE, lag.max=1000)
+plot(acf_result)
+```
+
+We plotted the ACF of the median amplitude for lags 0 to 1000. The ACF starts at 1 and goes down slowly. It is negative between about lag 200 and lag 600, which shows the slow change between loud and quiet sections. The plot is jagged, which shows fast changes in the amplitude. We see a clear peak near lag 90, which may show a repeating pattern.
+
+
+
+## Task c)
+
+```{r ex4_task3_chunk1}
+plot_acf_multiples <- function(data, base_period) {
+  par(mfrow = c(2, 2))
+  
+  for (multiplier in 1:4) {
+    max_lag <- base_period * multiplier
+    
+    acf_obj <- acf(data, plot = FALSE, lag.max = max_lag)
+    plot(acf_obj, main=paste("ACF (Lag Max:", max_lag, ")"))
+  }
+}
+```
+
+```{r ex4_task3_chunk2}
+lag_range <- 50:150
+best_lag <- lag_range[which.max(acf_result$acf[lag_range + 1])]
+best_lag 
+acf_result$acf[best_lag + 1]
+
+base_period_1 = best_lag
+plot_acf_multiples(agg_df$agg_amp, base_period_1)
+par(mfrow = c(1, 1))
+```
+
+We looked for the highest peak in the ACF between lag 50 and lag 150. The highest peak is at lag 92, with an ACF value of 0.60. We propose a seasonal period of 92 frames, which is about 4.3 seconds. In the plots with multiples of the period, we also see a peak near lag 184, but it is smaller. The peaks get weaker at larger lags, so the pattern is not perfectly regular over the whole song.
+
+
+
+## Task d)
+
+```{r ex4_task4_chunk1}
+plot_stl_analysis <- function(stl_df, p_title) {
+  stl_long <- stl_df %>%
+    pivot_longer(
+      cols = c("Observed", "Trend", "Seasonal", "Remainder"),
+      names_to = "Component",
+      values_to = "Value"
+    ) %>%
+    mutate(
+      Component = factor(Component, levels = 
+                           c("Observed", "Trend", "Seasonal", "Remainder"))
+    )
+  
+  p <- ggplot(stl_long, aes(x = time_sec, y = Value, color = Component)) +
+    geom_line(show.legend = FALSE) +
+    facet_wrap(~ Component, ncol = 1, scales = "free_y") +
+    scale_color_manual(values = 
+                         c("Observed" = "black", 
+                           "Trend" = "firebrick", 
+                           "Seasonal" = "steelblue", 
+                           "Remainder" = "darkgreen"
+                           )
+                      ) +
+    labs(
+      title = p_title,
+      x = "Time (seconds)",
+      y = "Amplitude"
+    ) +
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex4_task4_chunk2}
+agg_ts <- ts(agg_df$agg_amp, frequency=base_period_1)
+stl_1 <- stl(agg_ts, s.window = 7, t.window = 365, robust = TRUE)
+
+stl_df_1 <- data.frame(
+  time_sec  = agg_df$time_sec,
+  Observed  = as.numeric(agg_ts),                             
+  Trend     = as.numeric(stl_1$time.series[, "trend"]),
+  Seasonal  = as.numeric(stl_1$time.series[, "seasonal"]),
+  Remainder = as.numeric(stl_1$time.series[, "remainder"])
+)
+
+# Small windows
+stl_small <- stl(agg_ts, s.window = 3, t.window = 51, robust = TRUE)
+
+# Large windows
+stl_large <- stl(agg_ts, s.window = 31, t.window = 1001, robust = TRUE)
+
+# Periodic seasonality
+stl_per <- stl(agg_ts, s.window = "periodic", t.window = 365, robust = TRUE)
+
+make_df <- function(stl_obj) {
+  data.frame(
+    time_sec  = agg_df$time_sec,
+    Observed  = as.numeric(agg_ts),
+    Trend     = as.numeric(stl_obj$time.series[, "trend"]),
+    Seasonal  = as.numeric(stl_obj$time.series[, "seasonal"]),
+    Remainder = as.numeric(stl_obj$time.series[, "remainder"])
+  )
+}
+
+plot_stl_analysis(stl_df_1, "STL with period 92 (s.window = 7, t.window = 365)")
+plot_stl_analysis(make_df(stl_small), "Small windows (s = 3, t = 51)")
+plot_stl_analysis(make_df(stl_large), "Large windows (s = 31, t = 1001)")
+plot_stl_analysis(make_df(stl_per), "Periodic seasonality (t = 365)")
+```
+
+We tried four sets of STL windows. With small windows (s = 3, t = 51), the remainder is almost zero, because the trend and seasonal parts also follow the noise. This is overfitting. With large windows (s = 31, t = 1001), the trend is very smooth and the seasonal part is very regular, but the loud and quiet sections stay in the remainder. With periodic seasonality, the pattern is exactly the same in every cycle, which does not fit the loud parts well. The first choice (s = 7, t = 365) is a good middle: the trend follows the song structure, and the remainder is not empty. Large windows give a stable, simple model. Small windows give a flexible model that can overfit.
+
+
+## Task e)
+```{r}
+acf_rem <- acf(stl_df_1$Remainder, plot = FALSE, lag.max = 1000)
+plot(acf_rem, main = "ACF of the remainder (first STL)")
+
+# Find the highest peaks (lag 0 is not included)
+acf_vals <- as.numeric(acf_rem$acf)    # first value is lag 0
+lags <- 1:999
+is_peak <- acf_vals[lags + 1] > acf_vals[lags] & acf_vals[lags + 1] > acf_vals[lags + 2]
+peak_tab <- data.frame(lag = lags[is_peak], acf = acf_vals[lags[is_peak] + 1])
+head(peak_tab[order(-peak_tab$acf), ], 10)
+```
+
+```{r ex4_task5_chunk1}
+base_period_2 = 6
+plot_acf_multiples(stl_df_1$Remainder, base_period_2)
+par(mfrow = c(1, 1))
+```
+
+We plotted the ACF of the remainder for multiples of 6 frames. We see small peaks at lags 6, 12, 17 and 23. This means a short periodic pattern of about 6 frames (about 0.27 seconds) is still in the data. The peaks are weak and slowly move away from the multiples of 6, because the real period is about 5.75 frames. So the first STL did not explain everything. A faster pattern is left in the remainder.
+
+
+
+## Task f)
+
+```{r ex4_task6_chunk1}
+print_period_info <- function(audio_df, period) {
+  time_step <- median(diff(audio_df$time_sec))
+  time_per_period = time_step * period
+  periods_per_minute = 60 / time_per_period
+  cat("Period:", period, "frames\n")
+  cat("- Time per period:", time_per_period, "seconds\n")
+  cat("- Periods per minute:", periods_per_minute, "\n\n")
+}
+```
+
+```{r ex4_task6_chunk2}
+print_period_info(audio_df = agg_df, base_period_1)
+print_period_info(audio_df = agg_df, base_period_2)
+```
+
+The first period of 92 frames is 4.28 seconds, which is about 14 periods per minute. The second period of 6 frames is 0.28 seconds, which is about 215 periods per minute. One long period contains about 16 short periods. This fits a typical music structure. If the short period is an eighth note, the tempo is about 107 beats per minute and the long period is 2 bars. The first period also matches several section changes in the song (about 8 s, 17 s, 50 s and 67 s). We think the long period is the length of a bar group (a short phrase), and the short period is a fast note or beat inside it
+
+
+
+## Task g)
+
+```{r ex4_task7_chunk1}
+deseason_1 <- agg_df$agg_amp - stl_df_1$Seasonal
+
+deseason_ts <- ts(deseason_1, frequency = base_period_2)
+
+stl_2 <- stl(deseason_ts, s.window = 7, t.window = 365, robust = TRUE)
+
+stl_df_2 <- data.frame(
+  time_sec  = agg_df$time_sec,
+  Observed  = as.numeric(deseason_ts),
+  Trend     = as.numeric(stl_2$time.series[, "trend"]),
+  Seasonal  = as.numeric(stl_2$time.series[, "seasonal"]),
+  Remainder = as.numeric(stl_2$time.series[, "remainder"])
+)
+
+plot_stl_analysis(stl_df_2, "Second STL on the data without the first seasonal part (period 6)")
+```
+
+We subtracted the first seasonal part (period 92) from the original data. Then we ran a second STL with a period of 6 frames (s.window = 7, t.window = 365). The trend is almost the same as before and follows the loud and quiet sections. The second seasonal part is small (about -10 to +10), but it is bigger near 50 s, 73 s, 120 s and at the end of the song. The remainder is still large in the loud sections. So the short period is real, but it explains only a small part of the data.
+
+
+
+## Task h)
+
+```{r ex4_task8_chunk1}
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+print_two_pass_stl_results <- function(
+    original_df, stl_on_original_df, stl_on_residual_df
+    ) {
+  # Mean baseline
+  original = original_df$agg_amp
+  original_mean = mean(original)
+  
+  rmse_baseline_mean = rmse(original, original_mean)
+  
+  # Pass 1
+  just_trend = stl_on_original_df$Trend
+  fit1 <- stl_on_original_df$Trend + stl_on_original_df$Seasonal
+  recon1 <- fit1 + stl_on_original_df$Remainder
+  
+  rmse_just_trend = rmse(original, just_trend)
+  rmse_pass1 <- rmse(original, fit1)
+  rmse_pass1_reconstruction <- rmse(original, recon1)
+  
+  
+  # Pass 2
+  y2 <- stl_on_residual_df$Observed
+  fit2 <- 
+    stl_on_residual_df$Trend + 
+    stl_on_residual_df$Seasonal + 
+    stl_on_original_df$Seasonal
+  recon2 <- 
+    stl_on_residual_df$Trend + 
+    stl_on_residual_df$Seasonal + 
+    stl_on_residual_df$Remainder
+  
+  rmse_pass2 <- rmse(original, fit2)
+  rmse_pass2_reconstruction <- rmse(y2, recon2)
+  
+  
+  # Full reconstruction
+  two_pass_reconstruction <-
+    stl_on_original_df$Seasonal +
+    stl_on_residual_df$Trend +
+    stl_on_residual_df$Seasonal+
+    stl_on_residual_df$Remainder
+  
+  rmse_two_pass_reconstruction <-
+    rmse(original, two_pass_reconstruction)
+  
+  cat("\n========== RESULTS (RMSE) ==========\n")
+  cat("Component\n")
+  cat("- Baseline (mean): ", rmse_baseline_mean, "\n")
+  cat("- Trend_1: ", rmse_just_trend, "\n")
+  cat("- Trend_1 + Seasonal_1: ", rmse_pass1, "\n")
+  cat("- Trend_2 + Seasonal_2 + Seasonal_1: ", rmse_pass2, "\n")
+  cat("\nReconstruction (should be num. noise)\n")
+  cat("- Pass 1:", rmse_pass1_reconstruction, "\n")
+  cat("- Pass 2:", rmse_pass2_reconstruction, "\n")
+  cat("- Full:", rmse_two_pass_reconstruction, "\n")
+}
+```
+
+```{r ex4_task8_chunk2}
+print_two_pass_stl_results(
+  original_df = agg_df,
+  stl_on_original_df = stl_df_1,
+  stl_on_residual_df = stl_df_2
+)
+```
+
+We compared the models with RMSE. The baseline (mean) has an RMSE of 23.04. The first trend lowers it to 19.16. Adding the first seasonal part (period 92) lowers it to 14.59. Adding the second trend and seasonal part (period 6) lowers it only a little more, to 13.75. The reconstruction errors are about 1e-15, so the parts add up to the original data. So the modelled seasonality explains some of the data, mostly with the first period of 92 frames. The second period of 6 frames adds only a small gain. Still, a large part of the amplitude is not explained, because the loud sections are very jumpy and not perfectly regular. The RMSE is measured on the same data used to fit the model. So these numbers show how well the model fits, not how well it would predict new data.
+=======
+---
+title: "DAT320: Compulsory Assignment 2"
+author: "Group 5: Dan Trung Nguyen, Milad Tootoonchi, Sania Minaipour"
+date: "`r Sys.Date()`"
+output:
+  pdf_document
+---
+
+# Set-up
+
+```{r warning_suppression, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,   # Suppresses warning messages
+  message = FALSE    # Suppresses package startup and function messages
+)
+```
+
+## Packages
+
+```{r installing_packages, include=FALSE}
+#install.packages(c("tuneR", "seewave", "ggplot2", "dplyr", "tidyr", 
+#                   "gridExtra", "patchwork", "zoo", "ggrastr"))
+```
+
+```{r loading_packages}
+library(tuneR)
+library(seewave)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(patchwork)
+library(zoo)
+library(ggrastr)
+```
+
+## Random config
+
+```{r global_config}
+rseed = 105
+set.seed(rseed)
+```
+
+## Global helper function
+
+```{r global_helpers}
+plot_spectrogram <- function(amplitude_df, p_title, hide_yticks=TRUE, dpi=150) {
+  long_df <- amplitude_df %>%
+    pivot_longer(
+      cols = -time_sec, 
+      names_to = "frequency", 
+      values_to = "amplitude"
+    )
+  
+  p <- ggplot(long_df, aes(x=time_sec, y=frequency, fill=log(amplitude))) +
+    geom_tile_rast(dpi=dpi) +
+    scale_fill_viridis_c(option = "magma", na.value = "white", 
+                         name = "log(amplitude)") +
+    labs(title = p_title, x = "Time (seconds)", y = "Frequency (kHz)") +
+    theme_minimal()
+  
+  if (hide_yticks) {
+    p <- p + theme(axis.text.y = element_blank())
+  }
+  
+  return(p)
+}
+```
+
+------------------------------------------------------------------------
+
+# Exercise 1, Working With Spectral Data
+
+## Task a)
+
+We will be moving the audio files into a folder called "Audio".
+
+```{r ex1_task1_chunk1}
+# Load data
+indigo <- readMP3(filename = "./Audio/indigo_ta_meg_med.mp3")
+```
+
+## Task b + c)
+
+```{r ex1_task2_chunk1}
+print_audio_info <- function(wave) {
+  cat("Sample rate:", wave@samp.rate, "Hz\n")
+  cat("Number of samples:", length(wave@left), "\n")
+  cat("Duration:", length(wave@left)/wave@samp.rate, "seconds\n") # total samples / frequency
+}
+```
+
+b)  Sample rate works as the resolution of a continuous wave. Since a continuous wave contains an infinite amount of points, we have to record it as a discrete wave in order to store it digitally. This requires us to set a sample rate, which decides how many times we're going to "look at" or sample this wave. Higher sample rates means that we're looking at this wave multiple times, and we may find small fluctuations from the sound wave. However, this will create more samples, resulting in more storage space and processing power needed.
+
+c)  We may print out the length of the audio by calculating it. An audio sound wave is created by having a specified \# of samples, where \# of them are played each second. This is called frequency, and the unit is in Hz.
+
+For this example, 11025 samples are played each second. There are 1478592 in total, so: $$ \frac{1478592}{11025} \approx 134 \approx 2 \text{ mins and } 14 \text { s}$$ So, we can fix this code by taking the number of samples and divide it by the frequency.
+
+```{r ex1_task2_chunk2}
+print_audio_info(wave = indigo)
+```
+
+## Task d)
+
+```{r ex1_task4_chunk1}
+# Short-Time Fourier Transform
+window_length = 2048 # Long windows means narrower frequency bins. Music prefers that
+overlap = 75
+indigo_stft <- spectro(
+  wave= indigo, 
+  wl=window_length, 
+  ovlp=overlap,
+  complex = FALSE,
+  norm = FALSE,
+  dB = NULL,
+  plot = FALSE
+)
+```
+
+About the three parameters:
+
+| Parameter | Function |
+|------------------------------------|------------------------------------|
+| `wl` | Window length. Controls the size of the time segment analyzed at one moment, in other words, how many samples go into each STFT window. Higher `wl` means larger window, and therefore higher frequency resolution, but worse time resolution. |
+| `ovlp` | Overlap. Controls how much the window should move after each Fourier transform. An overlap of 75% would mean that the next window will contain 75% of the samples from the previous window. |
+| `complex` | Chooses whether the STFT returns complex numbers or only the amplitude. If `TRUE`, each value is a complex number that holds both the amplitude and the phase of that frequency. If `FALSE`, only the amplitude is returned. |
+
+## Task e)
+
+```{r ex1_task5_chunk1}
+print_stft_info <- function(stft_result) {
+  cat("Frequency bins :", nrow(stft_result$amp), "\n")
+  cat("Total STFT frames:", ncol(stft_result$amp), "\n")
+  cat("Min. frequency:", min(stft_result$freq), "kHz\n")
+  cat("Max. frequency:", max(stft_result$freq), "kHz\n")
+}
+```
+
+```{r ex1_task5_chunk2}
+print_stft_info(indigo_stft)
+```
+
+The Nyquist frequency is the highest possible frequency that a specific sample rate allows. This is at half the sample rate due to how a wave oscillates, as it needs two samples per cycle to be captured. The Short-Time Fourier Transform splits the signal into short windows and computes the frequency content of each one. From the function `print_audio_info()`, we can see that the sample rate is 11025 Hz or 11.025 kHz. i) This means that our Nyquist frequency is about 5.5 kHz (5512.5 Hz) which corresponds to the output of `print_stft_info()`.
+
+The number of frequency bins is also determined by this frequency. A frequency bin is basically a method to gather multiple frequencies to combine them into a larger bin. This is what this type of Fourier transform does. ii) This means that the Nyquist frequency acts as a hard cap on how many unique frequencies are possible, this also affects our amount of bins. We may calculate the number of bins using the formula:
+
+$$\text{number of bins} = \frac{\text{Nyquist frequency}}{\Delta f}$$ where $\Delta f$ is the frequency resolution, which is defined by the sample rate divided by window length.
+
+$$ \Delta f = \frac{\text{sample rate}}{\text{wl}} $$ Plugging in the numbers, we get:
+
+$$ \begin{aligned}
+\Delta f &= \frac{11025 \text{ Hz}}{2048} \approx 5.38 \text{ Hz} \\
+\text{number of bins} &= \frac{5512.5 \text{ Hz}}{5.38 \text{ Hz}} \approx 1024
+\end{aligned} $$
+
+Which corresponds to the output from `print_stft_info()`.
+
+## Task f)
+
+```{r ex1_task6_chunk1}
+get_amplitude_df <- function(stft_result, amplitude_matrix) {
+  amplitude_matrix <- t(amplitude_matrix)
+  colnames(amplitude_matrix) <- 
+    paste0("freq_", round(stft_result$freq, 3), "kHz")
+  amplitude_df <- as.data.frame(amplitude_matrix)
+  amplitude_df$time_sec <- stft_result$time
+  return(amplitude_df)
+}
+```
+
+```{r ex1_task6_chunk2}
+# Helper function already does all the heavy work. We just need to replace the "???" with our function
+amp_df <- get_amplitude_df(stft_result = indigo_stft, amplitude_matrix=indigo_stft$amp)
+plot_spectrogram(amplitude_df = amp_df, p_title = "Amplitude spectrogram of 'Indigo ta meg med'")
+```
+
+The first thing to note about this spectrogram is how the colors describe the song. Brighter parts mean that the frequency was stronger, while darker means it was weaker. In other words, the bins had a larger value if they were brighter.
+
+At the top, we can see that there is a line where most of the frequencies above have little to no value. This appears as purple. However, there are some sharp lines going through this purple rectangle. A reason to this happening may be due to a low-pass filter, where higher frequencies are dropped off or compression (the file is in the `.mp3` format). The lines stretch across the whole frequency axis with a constant yellow color. A filter works by reducing the amplitude of high frequencies, and this means some sounds may go through it. This is usually really loud sounds. We can say that because the line is a constant yellow color, meaning the sound was strong across all frequencies at once.
+
+We can also see that there are multiple vertical lines consisting of red. This shows us that there are generally lower values of each frequency. This corresponds to the pure instrumental part of the song such as the intro or the flute solo at 50s.
+
+One last thing to note is that the lower part of the spectrogram is the brightest. This shows us that the song uses instruments that produce lower frequencies.
+
+------------------------------------------------------------------------
+
+# Exercise 2, Principal Component Analysis
+
+## Task a)
+
+```{r ex2_task1_chunk1}
+get_banded_amp_df <- function(stft_res) {
+  freq_bands <- data.frame(
+    band = c(
+      "kHz_0_01",
+      "kHz_01_025",
+      "kHz_025_05",
+      "kHz_05_1",
+      "kHz_1_2",
+      "kHz_2_4",
+      "kHz_4_547"
+    ),
+    lower = c(0, 0.1, 0.25, 0.5, 1, 2, 4),
+    upper = c(0.1, 0.25, 0.5, 1, 2, 4, max(stft_res$freq))
+  )
+  
+  frequencies <- stft_res$freq
+  amplitude_matrix <- stft_res$amp
+  band_matrix <- matrix(
+    NA,
+    nrow = length(stft_res$time),
+    ncol = nrow(freq_bands)
+  )
+  
+  colnames(band_matrix) <- freq_bands$band
+  
+  for (i in seq_len(nrow(freq_bands))) {
+    idx <- frequencies >= freq_bands$lower[i] &
+           frequencies < freq_bands$upper[i]
+    
+    band_matrix[, i] <- colMeans(
+      amplitude_matrix[idx, , drop = FALSE],
+      na.rm = TRUE
+    )
+  }
+  
+  band_df <- as.data.frame(band_matrix)
+  band_df$time_sec <- stft_res$time
+  return(band_df)
+}
+```
+
+```{r ex2_task1_chunk2}
+banded_df <- get_banded_amp_df(stft_res = indigo_stft)
+plot_spectrogram(
+  amplitude_df = banded_df,
+  "Banded Amplitude spectrogram of 'Indigo ta meg med'", 
+  hide_yticks=FALSE
+  )
+```
+
+This spectrogram appears to be more "blocky" than the last one. This is due to us aggregating the 1024 different frequency bins into 7 wider bands. This causes the resolution of the spectrogram to drop a lot, resulting in horizontal lines.
+
+However, this spectrogram may give us a better overview of the music. This is because the small fluctuations in the frequencies are being averaged into larger bands, meaning that noise will affect the spectrogram less.
+
+The band containing frequencies from 0-0.1 kHz now has multiple purple sections. This makes it easier to see that the instruments that created lower frequencies weren't used in the flute solos. The other spectrogram did show us this with the darker red spots on the bottom, but here it is significantly easier to view.
+
+Another thing to note is that the bands are not uniform, the lower frequencies are getting a lot more representation than the higher frequencies. This is a good idea because of how human hearing works. A doubling of frequency corresponds to one octave, which we can see with the bands doubling in width each time.
+
+## Task b)
+
+Before performing PCA, we need to remove the time column. The purpose of performing PCA is to get the most important information from the bands, performing PCA with `time_sec` would therefore not make any sense.
+
+The argument `center` ensures that every band is centered around zero. This is done by subtracting the mean of each band. PCA tries to find the directions of maximum variance around the mean, so this is required.
+
+The argument `scale.` will scale the bands so they have a variance of one (unit variance). This is due to the different amplitude values, meaning the band with the highest variance would dominate the other ones. Scaling this makes sure every band has the same weight.
+
+```{r ex2_task2_chunk1}
+indigo_pca <- banded_df %>%
+  select(-time_sec) %>%
+  prcomp(center=TRUE, scale.=TRUE)
+```
+
+## Task c)
+
+```{r ex2_task3_chunk1}
+calculate_pca_var <- function(pca_res) {
+  var_explained <- (pca_res$sdev^2 / sum(pca_res$sdev^2)) * 100
+  cum_var <- cumsum(var_explained)
+
+  pca_variance <- data.frame(
+    PC = seq_along(var_explained),
+    Variance = var_explained,
+    Cumulative = cum_var
+  )
+  return(pca_variance)
+}
+
+plot_scree <- function(varaince_df, p_title) {
+  p <- ggplot(
+    varaince_df,
+    aes(x = PC, y = Variance)
+  ) +
+    geom_col(fill = "steelblue") +
+    geom_line(
+      aes(y = Cumulative / 2, group = 1),
+      color = "darkred",
+      linewidth = 1
+    ) +
+    geom_point(aes(y = Cumulative / 2), color = "darkred", size = 2) +
+    scale_y_continuous(
+      name = "Variance Explained (%)",
+      sec.axis = sec_axis(
+        ~ . * 2,
+        name = "Cumulative Variance (%)"
+      )
+    ) +
+    scale_x_continuous(breaks = varaince_df$PC
+    ) +
+    labs(title=p_title, x = "Principal Component") +
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex2_task3_chunk2}
+pca_var_df <- calculate_pca_var(pca_res = indigo_pca)
+plot_scree(pca_var_df, "Scree plot: Indigo PCA")
+```
+
+This plot consists of two plots; the blue bar plots and the red line plot. The blue plots are for the "Variance Explained (%)", which shows us how much each principal component explains the data's variance. It looks like PC1 explains about 60% of the total variance.
+
+The red plot is for the "Cumulative Variance (%)". It describes the total amount of "Variance Explained" from the x amount of PCs.
+
+We can use this to find how many PCs are necessary to explain 90% of the variance. The cumulative line is at about 85% after PC3 and slightly over 90% after PC4, so it passes 90% between them. We therefore need 4 principal components to explain at least 90% of the variance.
+
+## Task d)
+
+The scores are the coordinates of each observation (each time window) from the original data projected into the principal component space. These appear as scattered points on a 2-axis graph.
+
+Loadings are weights that show how much, and in which direction, each band influenced the PCs. A PC is a combination of all the frequency bands with the loadings as weights.
+
+```{r ex2_task4_chunk1}
+plot_pc_scatter <- function(scores_df, PC_x, PC_y, xlab, ylab, p_title="") {
+  p <- ggplot(
+    scores_df,
+    aes(x=.data[[PC_x]], y=.data[[PC_y]])
+  ) +
+    geom_point(alpha = 0.6, size = 1) +
+    labs(title = p_title, x = PC_x, y = PC_y) +
+    theme_minimal()
+  
+  return(p)
+}
+```
+
+```{r ex2_task4_chunk2}
+pca_scores <- as.data.frame(indigo_pca$x)
+pca_scores$time_sec <- banded_df$time_sec # Insert time column from "banded_df"
+
+p1 <- plot_pc_scatter(
+  scores_df = pca_scores, PC_x="PC1", PC_y="PC2", p_title="PC1 vs PC2"
+  )
+p2 <- plot_pc_scatter(
+  scores_df = pca_scores, PC_x="PC1", PC_y="PC3", p_title="PC1 vs PC3"
+  )
+
+grid.arrange(p1, p2, ncol=2)
+```
+Each point is one frame, which is a short slice of the song (about 0.19 seconds). PCs are uncorrelated, so there is no trend in these plots. Both plots look like a funnel. Quiet frames (low PC1) are close together near zero. Loud frames (high PC1) are more spread out. This means the mix of low and high frequencies changes a lot in loud parts of the song, but very little in quiet parts.
+
+
+## Task e)
+
+```{r}
+plot_scores_over_time <- function(scores_df, PC_x, p_title) {
+  pca_long <- scores_df %>%
+    select(time_sec, .data[[PC_x]]
+    ) %>%
+    pivot_longer(
+      cols = c(.data[[PC_x]]), names_to = "Component", values_to = "Score"
+    )
+  
+  p <- ggplot(
+    pca_long,
+    aes(x=time_sec, y=Score, color=Component)
+  ) +
+    geom_line(alpha = 0.8) +
+    labs(
+      title = p_title,
+      x = "Time (seconds)",
+      y = "Score"
+    ) +
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex2_task5_chunk2}
+p1 <- plot_scores_over_time(
+  pca_scores, PC_x="PC1", p_title="Principal Components scores vs Time"
+  )
+p2 <- plot_scores_over_time(
+  pca_scores, PC_x="PC2", p_title=""
+  )
+grid.arrange(p1, p2, ncol=1)
+```
+
+We can compare this score plot against our banded spectrogram. When the scores plot dips to a negative value, the spectrogram contains a large amount of purple, especially in the low bands. And when it scores high, the amplitude across all bands is higher (lighter colors). PC1 will most likely be capturing the total amplitude across all bands for each time window.
+
+The PC2 plot stays close to zero in the quiet parts (intro and flute solo). In the loud parts, it jumps between positive and negative values. A positive value means more low frequencies (like bass), and a negative value means more high frequencies. This may show how the music switches between different instruments.
+
+## Task f)
+
+```{r ex2_task6_chunk1}
+loadings_df <- as.data.frame(indigo_pca$rotation)
+loadings_df
+```
+
+As mentioned earlier, the loadings show how much each band affects the principal components. PC1 has positive loadings of similar size across all bands, so its score is high when all bands are loud and low when all bands are quiet. PC1 therefore represents the overall energy, which confirms our interpretation in Task e).
+
+PC2 has positive loadings for the three lowest bands and negative loadings for the rest. A high score means the section has more low frequencies, for example from bass, while a low score means more high frequencies.
+
+PC3 works similarly to PC2, but focuses on the middle bands. It shows the balance between the mid frequencies and both extremes. PC4–PC7 each explain only a small share of the variance and have no clear pattern, so they may describe noise.
+
+------------------------------------------------------------------------
+
+# Exercise 3, Imputation of Missing Values
+
+## Task a)
+
+```{r ex3_task1_chunk1}
+flute <- readMP3(filename = "./Audio/flute_solo.mp3")
+print_audio_info(wave = flute)
+```
+
+## Task b)
+
+```{r ex3_task2_chunk1}
+wl_flute = 2048
+ovlp_flute = 75
+stft_res_flute <- spectro(
+  wave=flute, 
+  wl=wl_flute, 
+  ovlp=ovlp_flute,
+  complex = TRUE,
+  norm = FALSE,
+  dB = NULL,
+  plot = FALSE
+)
+```
+
+We use the same window length and overlap as in Exercise 1. The only difference is `complex = TRUE`, which makes `spectro()` return the raw complex STFT values instead of only their magnitudes. Each value contains both the amplitude and the phase of a frequency bin in a given frame.
+
+## Task c)
+
+When we set complex = TRUE, every value in the STFT becomes a complex number. You can think of each one as holding two pieces of information about a frequency in a given frame: how loud it is (the amplitude) and where in its cycle the wave is when the frame starts (the phase). The inverse Fourier transform needs both parts to turn each frame back into a time signal.
+
+If we only keep the amplitude, the phase information is lost. We still know which frequencies are present and how strong they are, but not how they line up in time. Many different sounds can have the exact same amplitude spectrum, so there is no single wave we can go back to. The phase also matters because the frames overlap. When the frames are added back together, the phase decides whether the waves line up and rebuild the original signal, or end up cancelling each other out and smearing the sound.
+
+## Task d)
+
+```{r ex3_task4_chunk1}
+flute_complex <- stft_res_flute$amp
+flute_amp <- abs(flute_complex)
+flute_phase <- Arg(flute_complex)
+```
+
+## Task e)
+
+```{r ex3_task5_chunk1}
+flute_amp_df <- get_amplitude_df(
+    stft_res=stft_res_flute, 
+    amplitude_matrix= flute_amp
+  )
+```
+
+```{r ex3_task5_chunk2}
+plot_spectrogram(amplitude_df=flute_amp_df, "Amplitude spectrogram of the flute solo")
+```
+
+The spectrogram shows a flute solo lasting about 16 seconds. The clearest features are short and bright horizontal lines. Each horizontal line corresponds to a note. These lines move up and down as the melody changes pitch. Between 5 and 10 seconds, several lines form a staircase pattern. This indicates that the melody moves step by step up or down the scale. At each note, the pattern is repeated at higher frequencies. These are the harmonics of the flute tone, appearing above the fundamental frequency. The areas between the note lines are not completely dark, but show moderate energy. This suggests that the flute is not playing alone and that there is some accompaniment underneath. The faint vertical stripes may be related to the rhythm or repeated attacks in the accompaniment. There are no obvious silent gaps, so music appears to be playing throughout the clip. As in Exercise 1, there is a dark band at the top of the spectrogram with very little energy. This is consistent with limited high-frequency content in the recording, possibly caused by MP3 compression removing the highest frequencies.
+
+## Task f)
+
+```{r ex3_task6_chunk1}
+remove_time_samples <- function(amplitude_df, missing_fraction) {
+  frequency_cols <- setdiff(names(amplitude_df), "time_sec")
+  n_frames <- nrow(amplitude_df)
+  n_missing <- floor(n_frames * missing_fraction)
+  missing_idxs <- sort(sample(seq_len(n_frames), size=n_missing, replace=FALSE))
+  spectral_missing <- amplitude_df
+  spectral_missing[missing_idxs, frequency_cols] <- NA
+  
+  print_missing_df_info(spectral_missing)
+  
+  return(list(spectral_missing, missing_idxs))
+}
+ 
+print_missing_df_info <- function(temporal_df) {
+  frequency_cols <- setdiff(names(temporal_df), "time_sec")
+  missing_indicator <- rowSums(is.na(temporal_df[frequency_cols])) > 0
+  
+  cat("Missing time frames:", sum(missing_indicator), "\n")
+  cat("Time frames with values:", sum(!missing_indicator), "\n")
+  cat("Percentage missing:", round(100 * mean(missing_indicator), 2), "%\n")
+  
+  gap_rle <- rle(missing_indicator)
+  gap_lengths <- gap_rle$lengths[gap_rle$values]
+  
+  cat("Number of gaps:", length(gap_lengths), "\n")
+  cat("Mean gap length:", round(mean(gap_lengths), 2), "frames\n")
+  cat("Median gap length:", median(gap_lengths), "frames\n")
+  cat("Longest gap:", max(gap_lengths), "frames\n")
+}
+```
+
+```{r ex3_task6_chunk2}
+missing_fraction = 0.8
+missing_res <- remove_time_samples(amplitude_df=flute_amp_df, 
+                                      missing_fraction=missing_fraction
+                                    )
+amp_missing_df <- missing_res[[1]] 
+missing_idx <- missing_res[[2]] 
+```
+
+```{r ex3_task6_chunk3}
+plot_spectrogram(amplitude_df=amp_missing_df, p_title="Flute solo with 80% of time frames missing")
+```
+
+The white areas are the 275 missing frames (about 80%), and the coloured stripes are the 69 frames that remain. The missing frames are spread over 56 gaps. Most of them are short (median 3 frames), but the longest is 19 frames, which is almost one second of music, as seen for example around 1 second and between 5 and 6 seconds. The note lines from the original spectrogram are now hard to follow, but the remaining frames still look like the original, with the dark band at the top and bright spots where the notes are. A note that falls entirely inside a long gap is lost and can only be estimated from the frames around it.
+
+## Task g)
+
+```{r ex3_task7_chunk1}
+impute_random <- function(x) {
+  x[is.na(x)] <- sample(na.omit(x), sum(is.na(x)), replace = TRUE)
+  x
+}
+
+impute_mean <- function(x) {
+  x[is.na(x)] <- mean(x, na.rm=TRUE)
+  x
+}
+
+apply_imputation <- function(data, method) {
+  frequency_cols <- setdiff(names(data), "time_sec")
+  result <- data
+  for (column in frequency_cols) {
+    result[[column]] <- method(data[[column]])
+  }
+  cat("Remaining NA:", sum(is.na(result[frequency_cols])), "\n")
+  result
+}
+```
+
+```{r ex3_task7_chunk2}
+imputed_random = apply_imputation(amp_missing_df, impute_random)
+imputed_mean = apply_imputation(amp_missing_df, impute_mean)
+impute_interp <- function(x) na.approx(x, na.rm = FALSE, rule = 2)
+imputed_interp = apply_imputation(amp_missing_df, impute_interp)
+```
+
+Mean imputation For mean imputation, every missing value is replaced by the average amplitude for that frequency bin across the whole clip. This is a simple baseline method. It keeps the overall loudness of each frequency roughly the same, but it does not use any information about time. This means that any changes in the music during a gap, such as a new note, are lost.
+
+Random imputation With random imputation, each missing value is replaced by a randomly chosen value that was actually observed in the same frequency bin. The values are therefore realistic for that frequency, but they are chosen without looking at what was happening before or after the gap. Because of this, they have no connection to the note being played at that moment. This method is mainly useful as another baseline to compare with the other methods.
+
+Linear interpolation For linear interpolation, we estimate each missing value by drawing a straight line between the closest observed frames before and after the gap. This is done separately for each frequency bin. We chose this method because music usually changes fairly smoothly over time, and a note often lasts for several frames. The values just before and after a gap can therefore give a reasonable estimate of what is missing.
+
+Unlike mean and random imputation, linear interpolation uses the order of the frames in time. However, it has some limitations. It cannot recover a note that is completely missing inside a long gap, and it tends to smooth out sudden changes in the music, such as a sharp note transition.
+
+## Task h)
+
+```{r ex3_task8_chunk1}
+evaluate_method <- function(original, imputed, method_name, missing_idx) {
+  frequency_cols <- setdiff(names(original), "time_sec")
+  
+  true_values <- as.matrix(original[missing_idx, frequency_cols])
+  predicted_values <- as.matrix(imputed[missing_idx, frequency_cols])
+
+  errors <- predicted_values - true_values
+  rmse <- sqrt(mean(errors^2))
+  mae <- mean(abs(errors))
+
+  cat("Method:",method_name, "| RMSE:", rmse, "| MAE:", mae, "\n")
+}
+```
+
+```{r ex3_task8_chunk2}
+evaluate_method(flute_amp_df, imputed_random, "Random", missing_idx)
+evaluate_method(flute_amp_df, imputed_mean, "Mean", missing_idx)
+evaluate_method(flute_amp_df, imputed_interp, "Linear interpolation", missing_idx)
+```
+
+Linear interpolation performs best, with an RMSE of 40.3 and an MAE of 10.7, followed by mean imputation (RMSE 54.9, MAE 16.2) and random imputation (RMSE 77.8, MAE 20.0). Interpolation does best because it use the neighbour frames in time, and since notes often last several frames, these are usually close to the true values. Random imputation does worst because it places values with no connection to what was actually played.
+
+For all methods, the RMSE is three to four times larger than the MAE. Since RMSE squares the errors, it is more affected by large mistakes, which means a large part of the error comes from a few frames with high amplitude, most likely the bright note lines. The errors are only measured on the missing frames, since the remaining 20% are identical to the original for every method.
+
+## Task i)
+
+```{r ex3_task9_chunk1}
+p_original <- plot_spectrogram(flute_amp_df, "Original flute solo")
+p_mean <- plot_spectrogram(imputed_mean, "Mean imputation")
+p_random <- plot_spectrogram(imputed_random, "Random imputation")
+p_interp <- plot_spectrogram(imputed_interp, "Linear interpolation")
+
+grid.arrange(p_original, p_mean, p_random, p_interp, ncol = 1)
+```
+
+The three methods give very different results. Mean imputation fills every gap with the same value for each frequency, which shows up as flat horizontal stripes across the whole clip. The only places where something changes are the thin vertical lines, which are the 20% of the frames that were kept. All the notes and the melody in the gaps are gone.
+
+Random imputation looks like noise. The overall brightness is about right, since the values come from the same frequency, but they are placed at random times, so there are no clear note lines left at all.
+
+Linear interpolation is the closest to the original. Some of the horizontal note lines are still visible, because each gap is filled with values between the frames on either side. However, the notes are smeared out and the transitions between them are blurred, and in the longer gaps you can see smooth, stretched-out patches where notes that were removed completely have been replaced by a blend of their neighbours. This matches the results from Task "h", where interpolation had the lowest error.
+
+## Task j)
+
+```{r ex3_task10_chunk1}
+reconstruct_complex_stft <- function(
+    imputed_df, original_complex, original_phase
+    ) {
+  frequency_cols <- setdiff(names(imputed_df), "time_sec")
+  amp <- t(as.matrix(imputed_df[, frequency_cols]))
+  amp * exp(1i * original_phase)
+}
+
+make_wave <- function(stft_mat, wl, ovlp) {
+  w <- istft(
+    stft_mat,
+    f = audio_data_flute@samp.rate,
+    wl = wl,
+    ovlp = ovlp,
+    wn = "hanning",
+    output = "Wave"
+  )
+  sig <- as.numeric(w@left)
+  mx <- max(abs(sig), na.rm = TRUE)
+  if (mx > 0) {
+    sig <- sig / mx
+  }
+  sig_int <- as.integer(round(sig * 32767))
+  w <- Wave(left=sig_int, samp.rate=w@samp.rate, bit=16)
+}
+```
+
+```{r ex3_task10_chunk2}
+audio_data_flute <- flute
+
+stft_random <- reconstruct_complex_stft(
+  imputed_df=imputed_random, original_complex=flute_complex, original_phase=flute_phase
+    )
+wave_random <- make_wave(stft_mat=stft_random, wl=wl_flute, ovlp=ovlp_flute)
+play(wave_random)
+
+stft_mean <- reconstruct_complex_stft(
+  imputed_df = imputed_mean, original_complex = flute_complex, original_phase = flute_phase
+)
+wave_mean <- make_wave(stft_mat = stft_mean, wl = wl_flute, ovlp = ovlp_flute)
+play(wave_mean)
+
+stft_interp <- reconstruct_complex_stft(
+  imputed_df = imputed_interp, original_complex = flute_complex, original_phase = flute_phase
+)
+wave_interp <- make_wave(stft_mat = stft_interp, wl = wl_flute, ovlp = ovlp_flute)
+play(wave_interp)
+```
+
+
+We listened to all three reconstructions. The linear interpolation sounded best and was closest to the original, which fits with it having the lowest error in Task h. The mean imputation sounded flat in the gaps, and the random imputation had the most noise. Even the random one still sounds a lot like the original, even though 80% of the amplitudes were replaced with random values. The melody and rhythm are easy to follow.
+
+The main reason is that we kept the original phase. The phase tells us where each frequency is in its cycle, and the way it changes from frame to frame also says something about the pitch and when the notes start. So even with the wrong amplitudes, the timing and pitch of the notes are still there in the signal. In addition, 20% of the frames are still original. The frames also overlap, so most parts of the audio still get some help from an original frame. And the random values aren't completely random either, since they come from the same frequency bin and are about as loud as that frequency usually is. So most of the song survives, and the random values mostly just add a bit of noise on top.
+
+------------------------------------------------------------------------
+
+# Exercise 4, STL and Autocorrelation
+
+## Task a)
+
+```{r ex4_task1_chunk1}
+plot_aggregated_amp <- function(agg_df, p_title) {
+  p <- ggplot(agg_df, aes(x=time_sec, y=agg_amp)) +
+    geom_line(color = "darkblue", alpha = 0.8) +
+    labs(
+      title = p_title,
+      x = "Time (seconds)",
+      y = "Amplitude"
+    ) + 
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex4_task1_chunk2}
+agg_df <- amp_df %>% mutate(
+    agg_amp = apply(select(., -time_sec), 1, "median", na.rm=TRUE)
+  )
+
+plot_aggregated_amp(agg_df = agg_df, "Median amplitude over all frequencies")
+
+# Checks
+dim(agg_df)
+head(agg_df[, c("time_sec", "agg_amp")])
+summary(agg_df$agg_amp)
+```
+
+We calculated the median amplitude over all frequencies for each frame. The new data frame has 2884 rows. Each frame is about 0.0465 seconds long, so the song is about 134 seconds. The median amplitude is 19.07 and the mean is 26.28. The mean is higher because a few very loud frames pull it up. The plot shows loud and quiet sections of the song. Inside the loud sections, the amplitude goes up and down very fast, which may be a repeating rhythm. We will look for this rhythm with the autocorrelation function.
+
+## Task b)
+
+```{r ex4_task2_chunk1}
+acf_result <- acf(agg_df$agg_amp, plot=FALSE, lag.max=1000)
+plot(acf_result)
+```
+
+We plotted the ACF of the median amplitude for lags 0 to 1000. The ACF starts at 1 and goes down slowly. It is negative between about lag 200 and lag 600 ish, which shows the slow change between loud and quiet sections. The plot is jagged, which shows fast changes in the amplitude. We see a clear peak near lag 90, which may show a repeating pattern.
+
+## Task c)
+
+```{r ex4_task3_chunk1}
+plot_acf_multiples <- function(data, base_period) {
+  par(mfrow = c(2, 2))
+  
+  for (multiplier in 1:4) {
+    max_lag <- base_period * multiplier
+    
+    acf_obj <- acf(data, plot = FALSE, lag.max = max_lag)
+    plot(acf_obj, main=paste("ACF (Lag Max:", max_lag, ")"))
+  }
+}
+```
+
+```{r ex4_task3_chunk2}
+lag_range <- 50:150
+best_lag <- lag_range[which.max(acf_result$acf[lag_range + 1])]
+best_lag 
+acf_result$acf[best_lag + 1]
+
+base_period_1 = best_lag
+plot_acf_multiples(agg_df$agg_amp, base_period_1)
+par(mfrow = c(1, 1))
+```
+
+We looked for the highest peak in the ACF between lag 50 and lag 150. The highest peak is at lag 92, with an ACF value of 0.60. We propose a seasonal period of 92 frames, which is about 4.3 seconds. In the plots with multiples of the period, we also see a peak near lag 184, but it is smaller. The peaks get weaker at larger lags, so the pattern is not perfectly regular over the whole song. Lag is the size of the shift, in frames. Lag 92 means we compare each value with the one 92 frames later.
+
+## Task d)
+
+```{r ex4_task4_chunk1}
+plot_stl_analysis <- function(stl_df, p_title) {
+  stl_long <- stl_df %>%
+    pivot_longer(
+      cols = c("Observed", "Trend", "Seasonal", "Remainder"),
+      names_to = "Component",
+      values_to = "Value"
+    ) %>%
+    mutate(
+      Component = factor(Component, levels = 
+                           c("Observed", "Trend", "Seasonal", "Remainder"))
+    )
+  
+  p <- ggplot(stl_long, aes(x = time_sec, y = Value, color = Component)) +
+    geom_line(show.legend = FALSE) +
+    facet_wrap(~ Component, ncol = 1, scales = "free_y") +
+    scale_color_manual(values = 
+                         c("Observed" = "black", 
+                           "Trend" = "firebrick", 
+                           "Seasonal" = "steelblue", 
+                           "Remainder" = "darkgreen"
+                           )
+                      ) +
+    labs(
+      title = p_title,
+      x = "Time (seconds)",
+      y = "Amplitude"
+    ) +
+    theme_minimal()
+  return(p)
+}
+```
+
+```{r ex4_task4_chunk2}
+agg_ts <- ts(agg_df$agg_amp, frequency=base_period_1)
+stl_1 <- stl(agg_ts, s.window = 7, t.window = 365, robust = TRUE)
+
+stl_df_1 <- data.frame(
+  time_sec  = agg_df$time_sec,
+  Observed  = as.numeric(agg_ts),                             
+  Trend     = as.numeric(stl_1$time.series[, "trend"]),
+  Seasonal  = as.numeric(stl_1$time.series[, "seasonal"]),
+  Remainder = as.numeric(stl_1$time.series[, "remainder"])
+)
+
+# Small windows
+stl_small <- stl(agg_ts, s.window = 3, t.window = 51, robust = TRUE)
+
+# Large windows
+stl_large <- stl(agg_ts, s.window = 31, t.window = 1001, robust = TRUE)
+
+# Periodic seasonality
+stl_per <- stl(agg_ts, s.window = "periodic", t.window = 365, robust = TRUE)
+
+make_df <- function(stl_obj) {
+  data.frame(
+    time_sec  = agg_df$time_sec,
+    Observed  = as.numeric(agg_ts),
+    Trend     = as.numeric(stl_obj$time.series[, "trend"]),
+    Seasonal  = as.numeric(stl_obj$time.series[, "seasonal"]),
+    Remainder = as.numeric(stl_obj$time.series[, "remainder"])
+  )
+}
+
+plot_stl_analysis(stl_df_1, "STL with period 92 (s.window = 7, t.window = 365)")
+plot_stl_analysis(make_df(stl_small), "Small windows (s = 3, t = 51)")
+plot_stl_analysis(make_df(stl_large), "Large windows (s = 31, t = 1001)")
+plot_stl_analysis(make_df(stl_per), "Periodic seasonality (t = 365)")
+```
+
+We tried four sets of STL windows. With small windows (s = 3, t = 51), the remainder is almost zero, because the trend and seasonal parts also follow the noise. This is overfitting. With large windows (s = 31, t = 1001), the trend is very smooth and the seasonal part is very regular, but the loud and quiet sections stay in the remainder. With periodic seasonality, the pattern is exactly the same in every cycle, which does not fit the loud parts well. The first choice (s = 7, t = 365) is a good middle: the trend follows the song structure, and the remainder is not empty. Large windows give a stable, simple model. Small windows give a flexible model that can overfit.
+
+## Task e)
+
+```{r}
+acf_rem <- acf(stl_df_1$Remainder, plot = FALSE, lag.max = 1000)
+plot(acf_rem, main = "ACF of the remainder (first STL)")
+
+# Find the highest peaks (lag 0 is not included)
+acf_vals <- as.numeric(acf_rem$acf)    # first value is lag 0
+lags <- 1:999
+is_peak <- acf_vals[lags + 1] > acf_vals[lags] & acf_vals[lags + 1] > acf_vals[lags + 2]
+peak_tab <- data.frame(lag = lags[is_peak], acf = acf_vals[lags[is_peak] + 1])
+head(peak_tab[order(-peak_tab$acf), ], 10)
+```
+
+```{r ex4_task5_chunk1}
+base_period_2 = 6
+plot_acf_multiples(stl_df_1$Remainder, base_period_2)
+par(mfrow = c(1, 1))
+```
+
+We plotted the ACF of the remainder for multiples of 6 frames. We see small peaks at lags 6, 12, 17 and 23. This means a short periodic pattern of about 6 frames (about 0.27 seconds) is still in the data. The peaks are weak and slowly move away from the multiples of 6, because the real period is about 5.75 frames. So the first STL did not explain everything. A faster pattern is left in the remainder.
+
+## Task f)
+
+```{r ex4_task6_chunk1}
+print_period_info <- function(audio_df, period) {
+  time_step <- median(diff(audio_df$time_sec))
+  time_per_period = time_step * period
+  periods_per_minute = 60 / time_per_period
+  cat("Period:", period, "frames\n")
+  cat("- Time per period:", time_per_period, "seconds\n")
+  cat("- Periods per minute:", periods_per_minute, "\n\n")
+}
+```
+
+```{r ex4_task6_chunk2}
+print_period_info(audio_df = agg_df, base_period_1)
+print_period_info(audio_df = agg_df, base_period_2)
+```
+
+The first period of 92 frames is 4.28 seconds, which is about 14 periods per minute. The second period of 6 frames is 0.28 seconds, which is about 215 periods per minute. One long period contains about 16 short periods. This fits a typical music structure. If the short period is an eighth note, the tempo is about 107 beats per minute and the long period is 2 bars. The first period also matches several section changes in the song (about 8 s, 17 s, 50 s and 67 s). We think the long period is the length of a bar group (a short phrase), and the short period is a fast note or beat inside it.
+
+## Task g)
+
+```{r ex4_task7_chunk1}
+deseason_1 <- agg_df$agg_amp - stl_df_1$Seasonal
+
+deseason_ts <- ts(deseason_1, frequency = base_period_2)
+
+stl_2 <- stl(deseason_ts, s.window = 7, t.window = 365, robust = TRUE)
+
+stl_df_2 <- data.frame(
+  time_sec  = agg_df$time_sec,
+  Observed  = as.numeric(deseason_ts),
+  Trend     = as.numeric(stl_2$time.series[, "trend"]),
+  Seasonal  = as.numeric(stl_2$time.series[, "seasonal"]),
+  Remainder = as.numeric(stl_2$time.series[, "remainder"])
+)
+
+plot_stl_analysis(stl_df_2, "Second STL on the data without the first seasonal part (period 6)")
+```
+
+We subtracted the first seasonal part (period 92) from the original data. Then we ran a second STL with a period of 6 frames (s.window = 7, t.window = 365). The trend is almost the same as before and follows the loud and quiet sections. The second seasonal part is small (about -10 to +10), but it is bigger near 50 s, 73 s, 120 s and at the end of the song. The remainder is still large in the loud sections. So the short period is real, but it explains only a small part of the data.
+
+## Task h)
+
+```{r ex4_task8_chunk1}
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+print_two_pass_stl_results <- function(
+    original_df, stl_on_original_df, stl_on_residual_df
+    ) {
+  # Mean baseline
+  original = original_df$agg_amp
+  original_mean = mean(original)
+  
+  rmse_baseline_mean = rmse(original, original_mean)
+  
+  # Pass 1
+  just_trend = stl_on_original_df$Trend
+  fit1 <- stl_on_original_df$Trend + stl_on_original_df$Seasonal
+  recon1 <- fit1 + stl_on_original_df$Remainder
+  
+  rmse_just_trend = rmse(original, just_trend)
+  rmse_pass1 <- rmse(original, fit1)
+  rmse_pass1_reconstruction <- rmse(original, recon1)
+  
+  
+  # Pass 2
+  y2 <- stl_on_residual_df$Observed
+  fit2 <- 
+    stl_on_residual_df$Trend + 
+    stl_on_residual_df$Seasonal + 
+    stl_on_original_df$Seasonal
+  recon2 <- 
+    stl_on_residual_df$Trend + 
+    stl_on_residual_df$Seasonal + 
+    stl_on_residual_df$Remainder
+  
+  rmse_pass2 <- rmse(original, fit2)
+  rmse_pass2_reconstruction <- rmse(y2, recon2)
+  
+  
+  # Full reconstruction
+  two_pass_reconstruction <-
+    stl_on_original_df$Seasonal +
+    stl_on_residual_df$Trend +
+    stl_on_residual_df$Seasonal+
+    stl_on_residual_df$Remainder
+  
+  rmse_two_pass_reconstruction <-
+    rmse(original, two_pass_reconstruction)
+  
+  cat("\n========== RESULTS (RMSE) ==========\n")
+  cat("Component\n")
+  cat("- Baseline (mean): ", rmse_baseline_mean, "\n")
+  cat("- Trend_1: ", rmse_just_trend, "\n")
+  cat("- Trend_1 + Seasonal_1: ", rmse_pass1, "\n")
+  cat("- Trend_2 + Seasonal_2 + Seasonal_1: ", rmse_pass2, "\n")
+  cat("\nReconstruction (should be num. noise)\n")
+  cat("- Pass 1:", rmse_pass1_reconstruction, "\n")
+  cat("- Pass 2:", rmse_pass2_reconstruction, "\n")
+  cat("- Full:", rmse_two_pass_reconstruction, "\n")
+}
+```
+
+```{r ex4_task8_chunk2}
+print_two_pass_stl_results(
+  original_df = agg_df,
+  stl_on_original_df = stl_df_1,
+  stl_on_residual_df = stl_df_2
+)
+```
+
+We compared the models with RMSE. The baseline (mean) has an RMSE of 23.04. The first trend lowers it to 19.16. Adding the first seasonal part (period 92) lowers it to 14.59. Adding the second trend and seasonal part (period 6) lowers it only a little more, to 13.75. The reconstruction errors are about 1e-15, so the parts add up to the original data. So the modelled seasonality explains some of the data, mostly with the first period of 92 frames. The second period of 6 frames adds only a small gain. Still, a large part of the amplitude is not explained, because the loud sections are very jumpy and not perfectly regular. The RMSE is measured on the same data used to fit the model. So these numbers show how well the model fits, not how well it would predict new data.
+
+
+## Task i)
+```{r}
+stl_rec <- stl(agg_ts, s.window = 7, t.window = 177, l.window = 93, robust = TRUE)
+
+stl_df_rec <- data.frame(
+  time_sec  = agg_df$time_sec,
+  Observed  = as.numeric(agg_ts),
+  Trend     = as.numeric(stl_rec$time.series[, "trend"]),
+  Seasonal  = as.numeric(stl_rec$time.series[, "seasonal"]),
+  Remainder = as.numeric(stl_rec$time.series[, "remainder"])
+)
+
+plot_stl_analysis(stl_df_rec, "STL with paper parameters (s = 7, t = 177, l = 93)")
+
+# RMSE of trend + seasonal, to compare with 14.59 from s = 7, t = 365
+sqrt(mean((agg_df$agg_amp - (stl_df_rec$Trend + stl_df_rec$Seasonal))^2))
+```
+
+The trend is smooth and follows the loud and quiet sections of the song. The seasonal part is strong in loud sections and weak in quiet sections. The remainder is not empty, but it is larger in the loud sections and at the end of the song. The RMSE of trend plus seasonal is 14.07. This is a little lower than 14.59 with t.window = 365, and much lower than the baseline of 23.04. A lower RMSE alone does not prove a better model, because very small windows also give a low RMSE by overfitting. Here the trend is still smooth and the remainder is not empty, so we do not see overfitting.
+
+We suggest using these parameters for further work: period = 92, s.window = 7, t.window = 177, l.window = 93 and robust = TRUE. The values follow the rules in the paper, and they work well on our data. If the seasonal part looks noisy, s.window = 11 (with t.window = 161) is an alternative.
+>>>>>>> c9fe035 ( Final CA2)
