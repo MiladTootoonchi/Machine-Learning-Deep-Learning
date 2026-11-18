@@ -1,6 +1,0 @@
-In accordance with NMBU’s guidelines on the use of generative artificial intelligence, 
-I declare that I have used Claude (Anthropic) for language polishing and translation, 
-for support in understanding the assignment text, 
-and for guidance on implementing hyperparameter search with the Optuna library. 
-All analysis and academic reasoning in this assignment are my own work, and the majority of the code was written by me. 
-I remain solely responsible for the content and quality of the submission.
